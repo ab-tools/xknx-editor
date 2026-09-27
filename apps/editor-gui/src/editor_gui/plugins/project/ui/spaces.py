@@ -8,6 +8,7 @@ from imgui_bundle import imgui
 
 from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui._filter import filter_box
+from editor_gui.plugins.project.ui.config_dialog import DeviceConfigDialog
 
 if TYPE_CHECKING:
     from xknxeditor.proj.core.service import (
@@ -79,6 +80,11 @@ class SpacesPanel:
         on_remove_space: Callable[[int], None] | None = None,
         on_set_device_space: Callable[[int, int | None], None] | None = None,
         get_unassigned_devices: "Callable[[], list[SpaceDeviceInfo]] | None" = None,
+        on_copy_config: Callable[[int], None] | None = None,
+        on_paste_config: Callable[[int, bool, bool], None] | None = None,
+        on_duplicate_config: Callable[[int, bool, bool], None] | None = None,
+        can_paste_config: Callable[[int], bool] | None = None,
+        count_paste_targets: Callable[[int], int] | None = None,
     ) -> None:
         self._get_space_tree = get_space_tree
         self._on_select_device_id = on_select_device_id
@@ -96,6 +102,14 @@ class SpacesPanel:
         self._on_remove_space = on_remove_space
         self._on_set_device_space = on_set_device_space
         self._get_unassigned_devices = get_unassigned_devices
+        self._on_copy_config = on_copy_config
+        self._can_paste_config_cb = can_paste_config
+        self._config_dialog = DeviceConfigDialog(
+            "spaces",
+            on_paste_config or (lambda _n, _p, _l: None),
+            on_duplicate_config or (lambda _n, _p, _l: None),
+            count_paste_targets or (lambda _n: 1),
+        )
         self._filter_text: str = ""
         # "New function" form state (one dialog at a time; keyed by the target space).
         self._new_fn_space: int | None = None
@@ -138,6 +152,7 @@ class SpacesPanel:
         for space in tree:
             self._render_space(space, flt)
         self._render_unassigned_section()
+        self._config_dialog.render()
 
     def _render_space(self, space: "SpaceInfo", flt: str = "") -> None:
         if flt and not self._space_has_match(space, flt):
@@ -462,8 +477,10 @@ class SpacesPanel:
         )[0]:
             self._on_select_device_id(device.id)
         hovered = imgui.is_item_hovered()  # capture before the context menu below
-        has_menu = bool(device.individual_address) or (
-            space_id is not None and self._on_set_device_space is not None
+        has_menu = (
+            bool(device.individual_address)
+            or (space_id is not None and self._on_set_device_space is not None)
+            or self._on_copy_config is not None
         )
         if has_menu and imgui.begin_popup_context_item(f"##spdev_ctx_{device.id}"):
             if (
@@ -471,6 +488,25 @@ class SpacesPanel:
                 and imgui.menu_item(S.CONTEXT_COPY_ADDRESS, "", False)[0]
             ):
                 imgui.set_clipboard_text(device.individual_address)
+            if self._on_copy_config is not None:
+                config_label = (
+                    f"{device.individual_address} {primary}"
+                    if device.individual_address
+                    else primary
+                )
+                if imgui.menu_item(S.CONTEXT_DUPLICATE, "", False)[0]:
+                    self._config_dialog.open(device.id, config_label, "duplicate")
+                if imgui.menu_item(S.CONTEXT_COPY_CONFIG, "", False)[0]:
+                    self._on_copy_config(device.id)
+                if imgui.menu_item(
+                    S.CONTEXT_PASTE_CONFIG,
+                    "",
+                    False,
+                    self._can_paste_config_cb(device.id)
+                    if self._can_paste_config_cb is not None
+                    else False,
+                )[0]:
+                    self._config_dialog.open(device.id, config_label, "paste")
             if (
                 space_id is not None
                 and self._on_set_device_space is not None

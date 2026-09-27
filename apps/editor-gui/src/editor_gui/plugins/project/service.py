@@ -277,6 +277,20 @@ class _Assignment:
     is_sending: bool
 
 
+@dataclass
+class DeviceConfigClipboard:
+    """A copied device configuration for pasting onto another device of the same application.
+
+    ``params`` are (ref_id, value) parameter overrides. ``links`` are
+    (com_object_number, com_object_size, group_address_id, is_sending) tuples, re-attached to a
+    target's com-objects matched by number (guarded by object size)."""
+
+    app_id: str
+    source_label: str
+    params: list[tuple[str, str]]
+    links: list[tuple[int, str, int, bool]]
+
+
 class ProjectService:
     def __init__(self, catalog: "CatalogService") -> None:
         self._catalog = catalog
@@ -329,6 +343,8 @@ class ProjectService:
         self._requested_ga_id: int | None = None
         # Cross-panel "please bring the editor tab to front" request (consumed by the editor panel).
         self._focus_editor_requested = False
+        # Cross-panel "please bring the Group Addresses tab to front" request.
+        self._focus_group_addresses_requested = False
         # Re-instantiate a device's persisted com-objects on a function/mode parameter change, scoped
         # to exactly the objects that parameter controls (its ChooseWhenNode branches). Only the
         # objects the parameter governs are added/removed; channels and globals stay as configured.
@@ -1008,6 +1024,16 @@ class ProjectService:
         """One-shot: whether the editor tab was asked to focus, then cleared."""
         requested = self._focus_editor_requested
         self._focus_editor_requested = False
+        return requested
+
+    def focus_group_addresses(self) -> None:
+        """Ask the Group Addresses tab to come to the front (e.g. clicking a linked GA)."""
+        self._focus_group_addresses_requested = True
+
+    def take_focus_group_addresses(self) -> bool:
+        """One-shot: whether the Group Addresses tab was asked to focus, then cleared."""
+        requested = self._focus_group_addresses_requested
+        self._focus_group_addresses_requested = False
         return requested
 
     def _installation(self) -> Any:
@@ -1843,12 +1869,20 @@ class ProjectService:
         self._svc.remove_device(self._pid, node_id)
         self._bump()
 
-    def clone_device(self, node_id: int, count: int = 1) -> list[int]:
-        """Create ``count`` copies of a device, carrying over all parameter values.
+    def clone_device(
+        self,
+        node_id: int,
+        count: int = 1,
+        *,
+        include_params: bool = True,
+        include_links: bool = False,
+    ) -> list[int]:
+        """Create ``count`` copies of a device.
 
-        Copies keep the source product/application and parameter values; the individual address is
-        left unset (the copies land in the first segment) so the user assigns fresh addresses.
-        Returns the new device node ids."""
+        Copies keep the source product/application; parameter values are carried over when
+        ``include_params`` (default), and group-address links when ``include_links``. The individual
+        address is left unset (the copies land in the first segment) so the user assigns fresh
+        addresses. Returns the new device node ids."""
         if self._pid is None:
             return []
         row = next((r for r in self._svc.devices(self._pid) if r.id == node_id), None)
@@ -1858,7 +1892,11 @@ class ProjectService:
         if app is None:
             self._log.warning("cannot clone: application not resolved", device=node_id)
             return []
-        params = [(p.ref_id, p.value) for p in row.parameters]
+        params = (
+            [(p.ref_id, p.value) for p in row.parameters] if include_params else None
+        )
+        source = self.find_device_by_node_id(node_id) if include_links else None
+        source_links = self._capture_links(source) if source is not None else []
         created: list[int] = []
         for i in range(max(1, count)):
             suffix = " (copy)" if count == 1 else f" (copy {i + 1})"
@@ -1870,9 +1908,137 @@ class ProjectService:
                 parameters=params,
             )
             if new_id is not None:
+                if source_links:
+                    new_dev = self.find_device_by_node_id(new_id)
+                    if new_dev is not None:
+                        self._apply_links(new_dev, source_links, replace_matching=False)
                 created.append(new_id)
         self._log.info("device cloned", source=node_id, copies=len(created))
         return created
+
+    def copy_device_config(self, node_id: int) -> DeviceConfigClipboard | None:
+        """Snapshot a device's parameter values and group-address links for pasting onto another
+        device of the same application."""
+        if self._pid is None:
+            return None
+        device = self.find_device_by_node_id(node_id)
+        if device is None:
+            return None
+        app_id = getattr(device.app, "id", None)
+        if not app_id:
+            return None
+        row = next((r for r in self._svc.devices(self._pid) if r.id == node_id), None)
+        params = [(p.ref_id, p.value) for p in row.parameters] if row else []
+        return DeviceConfigClipboard(
+            app_id=app_id,
+            source_label=device.name or getattr(device.app, "name", "") or "",
+            params=params,
+            links=self._capture_links(device),
+        )
+
+    def paste_device_config(
+        self,
+        node_id: int,
+        clip: DeviceConfigClipboard,
+        *,
+        include_params: bool = True,
+        include_links: bool = True,
+    ) -> tuple[bool, int, int]:
+        """Apply a copied configuration onto a device running the same application. Returns
+        (ok, params_changed, links_mapped); ``ok`` is False when the target's application differs."""
+        if self._pid is None:
+            return (False, 0, 0)
+        device = self.find_device_by_node_id(node_id)
+        if device is None or getattr(device.app, "id", None) != clip.app_id:
+            return (False, 0, 0)
+        params_changed = (
+            self._apply_params(node_id, clip.params) if include_params else 0
+        )
+        links_mapped = 0
+        if include_links:
+            device = self.find_device_by_node_id(node_id)
+            if device is not None:
+                links_mapped = self._apply_links(
+                    device, clip.links, replace_matching=True
+                )
+        self._bump(structural=False)
+        self._log.info(
+            "paste device config",
+            target=node_id,
+            params=params_changed,
+            links=links_mapped,
+        )
+        return (True, params_changed, links_mapped)
+
+    def _capture_links(self, device: Device) -> list[tuple[int, str, int, bool]]:
+        """Snapshot a device's group-address links as
+        (com_object_number, com_object_size, group_address_id, is_sending)."""
+        out: list[tuple[int, str, int, bool]] = []
+        for co in device.get_visible_com_objects():
+            if co.db_id is None:
+                continue
+            for link in self.get_links_for_com_object(co.db_id):
+                out.append(
+                    (co.number, co.object_size, link.group_address_id, link.is_sending)
+                )
+        return out
+
+    def _apply_links(
+        self,
+        device: Device,
+        links: list[tuple[int, str, int, bool]],
+        *,
+        replace_matching: bool,
+    ) -> int:
+        """Attach captured links to a device's com-objects, matched by number (guarded by object
+        size). When ``replace_matching``, a matched com-object's existing links are removed first.
+        Returns how many com-objects were (re)linked."""
+        by_number = {
+            co.number: co
+            for co in device.get_visible_com_objects()
+            if co.db_id is not None
+        }
+        grouped: dict[int, tuple[str, list[tuple[int, bool]]]] = {}
+        for number, size, ga_id, is_sending in links:
+            grouped.setdefault(number, (size, []))[1].append((ga_id, is_sending))
+        mapped = 0
+        for number, (size, gas) in grouped.items():
+            nco = by_number.get(number)
+            if nco is None or nco.db_id is None:
+                continue
+            if size and nco.object_size and size != nco.object_size:
+                continue
+            if replace_matching:
+                for assignment in self.get_links_for_com_object(nco.db_id):
+                    self.unlink_com_object_from_ga(assignment.id)
+            for ga_id, is_sending in gas:
+                self.link_com_object_to_ga(nco.db_id, ga_id, is_sending=is_sending)
+            mapped += 1
+        return mapped
+
+    def _apply_params(self, node_id: int, params: list[tuple[str, str]]) -> int:
+        """Apply (ref_id, value) overrides to a single device in place, reconciling com-objects per
+        change. Re-fetches the device each step (a change may rebuild it). Returns changed count."""
+        changed = 0
+        for ref_id, value in params:
+            device = self.find_device_by_node_id(node_id)
+            if device is None:
+                break
+            try:
+                if device.get_param_value(ref_id) == value:
+                    continue
+                old_active = (
+                    device.active_parameter_driven_com_object_ref_ids()
+                    if self._co_reconcile_enabled
+                    else set[str]()
+                )
+                device.set_param_value(ref_id, value)
+                if self._sync_param_and_com_objects(device, ref_id, value, old_active):
+                    self._refresh_device(node_id)
+            except (KeyError, ValueError):
+                continue
+            changed += 1
+        return changed
 
     def set_device_individual_address(
         self, node_id: int, old_address: str, new_address: str

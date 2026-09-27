@@ -576,3 +576,30 @@ msgstr ""
 
 msgid "Apply changes to all channels"
 msgstr "Wijzigingen op alle kanalen toepassen"
+
+msgid "Duplicate"
+msgstr "Dupliceren"
+
+msgid "Copy configuration"
+msgstr "Configuratie kopiëren"
+
+msgid "Paste configuration"
+msgstr "Configuratie plakken"
+
+msgid "Paste configuration onto '{name}':"
+msgstr "Configuratie plakken op '{name}':"
+
+msgid "Paste configuration onto {count} selected devices:"
+msgstr "Configuratie plakken op {count} geselecteerde apparaten:"
+
+msgid "Duplicate '{name}':"
+msgstr "'{name}' dupliceren:"
+
+msgid "Parameters"
+msgstr "Parameters"
+
+msgid "Group address links"
+msgstr "Groepsadres-koppelingen"
+
+msgid "Paste"
+msgstr "Plakken"

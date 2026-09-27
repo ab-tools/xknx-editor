@@ -34,6 +34,41 @@ class WidgetStrings(BaseStrings):
         return _("None")
 
     @property
+    def GROUP_OBJECTS_COPY_LINKS(self) -> str:
+        return _("Copy links ({count})")
+
+    @property
+    def GROUP_OBJECTS_PASTE_LINKS(self) -> str:
+        return _("Paste links ({count})")
+
+    @property
+    def GROUP_OBJECTS_PASTE_LINKS_HINT(self) -> str:
+        return _(
+            "Assigns the copied links and flags to the checked objects in order (1st to "
+            "1st, 2nd to 2nd, …), replacing each target's current links."
+        )
+
+    @property
+    def GROUP_OBJECTS_PASTE_MERGE(self) -> str:
+        return _("Merge")
+
+    @property
+    def GROUP_OBJECTS_PASTE_MERGE_HINT(self) -> str:
+        return _("Keep each target's existing links and only add the copied ones.")
+
+    @property
+    def GROUP_OBJECTS_CTX_COPY(self) -> str:
+        return _("Copy links")
+
+    @property
+    def GROUP_OBJECTS_CTX_PASTE(self) -> str:
+        return _("Paste links")
+
+    @property
+    def GROUP_OBJECTS_CTX_COPY_TEXT(self) -> str:
+        return _("Copy addresses as text")
+
+    @property
     def GROUP_OBJECTS_BATCH_TITLE(self) -> str:
         return _("Create group addresses")
 

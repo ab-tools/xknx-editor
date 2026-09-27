@@ -1083,3 +1083,27 @@ msgstr ""
 
 msgid "Click to open this device in the editor"
 msgstr "Klicken, um dieses Gerät im Editor zu öffnen"
+
+msgid "Copy configuration"
+msgstr "Konfiguration kopieren"
+
+msgid "Paste configuration"
+msgstr "Konfiguration einfügen"
+
+msgid "Paste configuration onto '{name}':"
+msgstr "Konfiguration in '{name}' einfügen:"
+
+msgid "Paste configuration onto {count} selected devices:"
+msgstr "Konfiguration in {count} ausgewählte Geräte einfügen:"
+
+msgid "Duplicate '{name}':"
+msgstr "'{name}' duplizieren:"
+
+msgid "Parameters"
+msgstr "Parameter"
+
+msgid "Group address links"
+msgstr "Gruppenadress-Verknüpfungen"
+
+msgid "Paste"
+msgstr "Einfügen"

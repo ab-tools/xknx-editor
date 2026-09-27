@@ -1745,6 +1745,10 @@ class KnxGuiApp:
             hello_imgui.get_runner_params().docking_params.focus_dockable_window(
                 f"{_DOCK_LABELS['editor']()}###editor"
             )
+        if self._project_service.take_focus_group_addresses():
+            hello_imgui.get_runner_params().docking_params.focus_dockable_window(
+                f"{_DOCK_LABELS['group_addresses']()}###group_addresses"
+            )
         self._project_plugin.render_overlays()
         self._render_progress_modal()
         self._render_import_password_modal()

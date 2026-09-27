@@ -6,6 +6,7 @@ from imgui_bundle import imgui
 from editor_gui.device import Device
 from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui._filter import filter_box
+from editor_gui.plugins.project.ui.config_dialog import DeviceConfigDialog
 
 
 @dataclass
@@ -37,11 +38,17 @@ class DevicesPanel:
         on_create_line: Callable[[int, int, str], None],
         on_remove_line: Callable[[Line], None],
         on_rename_line: Callable[[Line, str], None],
-        on_clone_device: Callable[[Device], None] = lambda _d: None,
         get_selected_node_id: Callable[[], int | None] = lambda: None,
         on_select_devices: Callable[[Device, list[int]], None] | None = None,
         get_selected_node_ids: Callable[[], set[int]] = lambda: set(),
         on_delete_device: Callable[[Device], None] = lambda _d: None,
+        on_copy_config: Callable[[int], None] = lambda _n: None,
+        on_paste_config: Callable[[int, bool, bool], None] = lambda _n, _p, _l: None,
+        on_duplicate_config: Callable[[int, bool, bool], None] = (
+            lambda _n, _p, _l: None
+        ),
+        can_paste_config: Callable[[int], bool] = lambda _n: False,
+        count_paste_targets: Callable[[int], int] = lambda _n: 1,
     ) -> None:
         self._get_devices = get_devices
         self._get_areas = get_areas
@@ -53,8 +60,12 @@ class DevicesPanel:
         self._on_select_devices = on_select_devices
         self._get_selected_node_ids = get_selected_node_ids
         self._last_selected: int | None = None
-        self._on_clone_device = on_clone_device
         self._on_delete_device = on_delete_device
+        self._on_copy_config = on_copy_config
+        self._can_paste_config_cb = can_paste_config
+        self._config_dialog = DeviceConfigDialog(
+            "devices", on_paste_config, on_duplicate_config, count_paste_targets
+        )
         self._on_move_device = on_move_device
         self._on_create_area = on_create_area
         self._on_remove_area = on_remove_area
@@ -116,6 +127,7 @@ class DevicesPanel:
         self._render_new_line_popup()
         self._render_rename_popup()
         self._render_delete_device_popup()
+        self._config_dialog.render()
 
         leaf_flags = (
             imgui.TreeNodeFlags_.leaf
@@ -240,8 +252,18 @@ class DevicesPanel:
 
     def _render_device_context_menu(self, device: Device) -> None:
         if imgui.begin_popup_context_item(f"##dev_ctx_{device.node_id}"):
+            label = self._device_display_name(device)
             if imgui.menu_item(S.CONTEXT_DUPLICATE, "", False)[0]:
-                self._on_clone_device(device)
+                self._config_dialog.open(device.node_id, label, "duplicate")
+            if imgui.menu_item(S.CONTEXT_COPY_CONFIG, "", False)[0]:
+                self._on_copy_config(device.node_id)
+            if imgui.menu_item(
+                S.CONTEXT_PASTE_CONFIG,
+                "",
+                False,
+                self._can_paste_config_cb(device.node_id),
+            )[0]:
+                self._config_dialog.open(device.node_id, label, "paste")
             if (
                 device.individual_address
                 and imgui.menu_item(S.CONTEXT_COPY_ADDRESS, "", False)[0]

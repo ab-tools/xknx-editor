@@ -1436,6 +1436,46 @@ class ProjectStrings:
         return _("Duplicate")
 
     @property
+    def CONTEXT_COPY_CONFIG(self) -> str:
+        return _("Copy configuration")
+
+    @property
+    def CONTEXT_PASTE_CONFIG(self) -> str:
+        return _("Paste configuration")
+
+    @property
+    def CONFIG_DIALOG_TITLE(self) -> str:
+        return _("Copy configuration")
+
+    @property
+    def CONFIG_PASTE_INTO(self) -> str:
+        return _("Paste configuration onto '{name}':")
+
+    @property
+    def CONFIG_PASTE_INTO_MULTI(self) -> str:
+        return _("Paste configuration onto {count} selected devices:")
+
+    @property
+    def CONFIG_DUPLICATE_OF(self) -> str:
+        return _("Duplicate '{name}':")
+
+    @property
+    def CONFIG_INCLUDE_PARAMS(self) -> str:
+        return _("Parameters")
+
+    @property
+    def CONFIG_INCLUDE_LINKS(self) -> str:
+        return _("Group address links")
+
+    @property
+    def CONFIG_PASTE_BTN(self) -> str:
+        return _("Paste")
+
+    @property
+    def CONFIG_DUPLICATE_BTN(self) -> str:
+        return _("Duplicate")
+
+    @property
     def DEVICE_DELETE_TITLE(self) -> str:
         return _("Delete device")
 

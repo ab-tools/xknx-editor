@@ -84,6 +84,9 @@ class ConfigurePanel:
         get_selected_node_ids: Callable[[], set[int]] | None = None,
         on_param_change_selected: Callable[[list[int], str, str], None] | None = None,
         render_dali: Callable[[Device], None] | None = None,
+        on_navigate_ga: Callable[[int], None] | None = None,
+        on_paste_links: Callable[[int, list[tuple[int, bool]], bool], None]
+        | None = None,
     ) -> None:
         self._get_devices = get_devices
         self._get_selected_device = get_selected_device
@@ -137,6 +140,8 @@ class ConfigurePanel:
             group_style=group_style,
             next_free_sub=next_free_sub,
             get_ga_range_tree=get_ga_range_tree,
+            on_navigate_ga=on_navigate_ga,
+            on_paste_links=on_paste_links,
         )
         self._name_buffer: str = ""
         self._address_buffer: str = ""

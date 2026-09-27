@@ -4,6 +4,7 @@ including the group-address assignment column with linking/unlinking.
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from imgui_bundle import imgui
@@ -23,6 +24,17 @@ GroupLink = tuple[int, int, str, bool]
 GroupLinkResolver = Callable[[int], list[GroupLink]]
 # All assignable group addresses: (group_address_id, text).
 GroupAddressCatalog = Callable[[], list[tuple[int, str]]]
+# Paste a com-object's copied links onto a target: (target_db_id, [(ga_id, is_sending)], replace).
+PasteLinks = Callable[[int, list[tuple[int, bool]], bool], None]
+
+
+@dataclass
+class _CopiedObject:
+    """One source com-object's configuration on the clipboard: its links and flag values."""
+
+    links: list[tuple[int, bool]]  # (ga_id, is_sending), in the source's display order
+    flags: dict[str, bool] = field(default_factory=dict)  # attr -> value (C/R/W/T/U)
+
 
 # Accent colour for the sending group address (shown emphasised).
 _SENDING_COLOR = imgui.ImVec4(0.45, 0.8, 0.5, 1.0)
@@ -51,6 +63,8 @@ class GroupObjectsTable:
         group_style: Callable[[], object] | None = None,
         next_free_sub: Callable[[int, int], int] | None = None,
         get_ga_range_tree: Callable[[], list[Any]] | None = None,
+        on_navigate_ga: Callable[[int], None] | None = None,
+        on_paste_links: PasteLinks | None = None,
     ) -> None:
         self._set_flag = set_flag
         self._on_link = on_link
@@ -61,6 +75,13 @@ class GroupObjectsTable:
         self._group_style = group_style
         self._next_free_sub = next_free_sub
         self._get_ga_range_tree = get_ga_range_tree
+        self._on_navigate_ga = on_navigate_ga
+        self._on_paste_links = on_paste_links
+        # Copied com-object configs (one per source object, in table order). Paste maps them onto
+        # the checked target objects positionally.
+        self._link_clipboard: list[_CopiedObject] = []
+        # Paste option: merge keeps the target's existing links (add-only) instead of replacing.
+        self._paste_merge = False
         self._picker_filter = ""
         self._selected: set[str] = set()
         self._batch_template = "{object}"
@@ -107,6 +128,28 @@ class GroupObjectsTable:
             if imgui.button(S.GROUP_OBJECTS_AUTO_CREATE.format(count=len(selected))):
                 self._batch_open = True
             imgui.end_disabled()
+            if self._on_paste_links is not None:
+                targets = self._checked_targets(com_objects)
+                self._handle_copy_paste_shortcuts(device, com_objects, get_links)
+                imgui.same_line()
+                imgui.begin_disabled(not targets)
+                if imgui.button(S.GROUP_OBJECTS_COPY_LINKS.format(count=len(targets))):
+                    self._copy_checked(com_objects, get_links)
+                imgui.end_disabled()
+                paste_n = min(len(self._link_clipboard), len(targets))
+                imgui.same_line()
+                imgui.begin_disabled(paste_n == 0)
+                if imgui.button(S.GROUP_OBJECTS_PASTE_LINKS.format(count=paste_n)):
+                    self._paste_to_checked(device, com_objects)
+                imgui.end_disabled()
+                if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+                    imgui.set_tooltip(S.GROUP_OBJECTS_PASTE_LINKS_HINT)
+                imgui.same_line()
+                _, self._paste_merge = imgui.checkbox(
+                    S.GROUP_OBJECTS_PASTE_MERGE, self._paste_merge
+                )
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip(S.GROUP_OBJECTS_PASTE_MERGE_HINT)
             self._render_batch_popup(device, selected)
 
         flags = (
@@ -138,6 +181,78 @@ class GroupObjectsTable:
         # The link/create dialog is drawn here (not as a per-row popup) so it survives clicks on
         # other left-hand tabs and can be docked.
         self._render_add_window(get_links, get_all_group_addresses)
+
+    def _checked_targets(self, com_objects: list[ComObject]) -> list[ComObject]:
+        """Checked com-objects that have a DB row (the copy/paste source and target set)."""
+        return [
+            c for c in com_objects if c.id in self._selected and c.db_id is not None
+        ]
+
+    def _capture(
+        self, com_object: ComObject, get_links: GroupLinkResolver
+    ) -> _CopiedObject:
+        """Snapshot one com-object's links and flag values onto the clipboard shape."""
+        db_id = com_object.db_id
+        links = get_links(db_id) if db_id is not None else []
+        return _CopiedObject(
+            links=[(ga_id, sending) for _aid, ga_id, _text, sending in links],
+            flags={
+                attr: bool(getattr(com_object.flags, attr))
+                for attr, _letter, _name in FLAG_LABELS
+            },
+        )
+
+    def _copy_checked(
+        self, com_objects: list[ComObject], get_links: GroupLinkResolver
+    ) -> None:
+        self._link_clipboard = [
+            self._capture(c, get_links) for c in self._checked_targets(com_objects)
+        ]
+
+    def _apply(self, device: Device, target: ComObject, copied: _CopiedObject) -> None:
+        """Paste one clipboard entry onto a target object: its links (replace or merge) and its
+        unlocked flag values, mirroring how ETS carries flags along with a copied object."""
+        db_id = target.db_id
+        if db_id is None or self._on_paste_links is None:
+            return
+        self._on_paste_links(db_id, copied.links, not self._paste_merge)
+        for attr, _letter, _name in FLAG_LABELS:
+            if attr not in copied.flags:
+                continue
+            is_locked = (
+                getattr(target.flags, f"{attr}_locked", False)
+                if attr != "communication"
+                else False
+            )
+            value = copied.flags[attr]
+            if not is_locked and bool(getattr(target.flags, attr)) != value:
+                self._set_flag(device, target.id, attr, value)
+
+    def _paste_to_checked(self, device: Device, com_objects: list[ComObject]) -> None:
+        """Map the clipboard onto the checked targets positionally (1st to 1st, 2nd to 2nd, …)."""
+        targets = self._checked_targets(com_objects)
+        for target, copied in zip(targets, self._link_clipboard, strict=False):
+            self._apply(device, target, copied)
+
+    def _handle_copy_paste_shortcuts(
+        self, device: Device, com_objects: list[ComObject], get_links: GroupLinkResolver
+    ) -> None:
+        """Ctrl+C / Ctrl+V for the checked rows, mirroring the toolbar buttons."""
+        io = imgui.get_io()
+        if io.want_text_input:
+            return
+        if not imgui.is_window_focused(imgui.FocusedFlags_.root_and_child_windows):
+            return
+        if not (io.key_ctrl or io.key_super):
+            return
+        if imgui.is_key_pressed(imgui.Key.c) and self._checked_targets(com_objects):
+            self._copy_checked(com_objects, get_links)
+        elif (
+            imgui.is_key_pressed(imgui.Key.v)
+            and self._link_clipboard
+            and self._checked_targets(com_objects)
+        ):
+            self._paste_to_checked(device, com_objects)
 
     def _render_batch_popup(self, device: Device, selected: list[ComObject]) -> None:
         if self._batch_open:
@@ -199,6 +314,8 @@ class GroupObjectsTable:
         # The per-instance ETS @Description (free-text note) has no column of its own; show it on hover.
         if com_object.description and imgui.is_item_hovered():
             imgui.set_tooltip(com_object.description)
+        if self._on_paste_links is not None:
+            self._render_row_context_menu(device, com_object, get_links)
 
         imgui.table_set_column_index(2)
         imgui.text_disabled(getattr(com_object.dpt, "name", "") or "")
@@ -213,7 +330,7 @@ class GroupObjectsTable:
         db_id = com_object.db_id
         links = get_links(db_id) if db_id is not None else []
         # Sending group address first (accent colour); the rest are receive-only.
-        for assignment_id, _ga_id, text, is_sending in sorted(
+        for assignment_id, ga_id, text, is_sending in sorted(
             links, key=lambda link: not link[3]
         ):
             if imgui.small_button(f"x##unlink{assignment_id}"):
@@ -224,7 +341,11 @@ class GroupObjectsTable:
             else:
                 imgui.text(text)
             if imgui.is_item_hovered():
+                if self._on_navigate_ga is not None:
+                    imgui.set_mouse_cursor(imgui.MouseCursor_.hand)
                 imgui.set_tooltip(S.GA_SENDING if is_sending else S.GA_RECEIVING)
+            if self._on_navigate_ga is not None and imgui.is_item_clicked():
+                self._on_navigate_ga(ga_id)
         if db_id is not None:
             self._render_add(device, com_object, db_id, links, get_all_group_addresses)
 
@@ -247,6 +368,29 @@ class GroupObjectsTable:
                 imgui.set_tooltip(
                     S.TOOLTIP_LOCKED.format(name=full_name) if is_locked else full_name
                 )
+
+    def _render_row_context_menu(
+        self, device: Device, com_object: ComObject, get_links: GroupLinkResolver
+    ) -> None:
+        """Right-click menu on a single row: copy/paste this object's links, or copy its assigned
+        addresses as plain text to the system clipboard."""
+        if not imgui.begin_popup_context_item(
+            f"##ctx_{device.node_id}_{com_object.id}"
+        ):
+            return
+        if imgui.menu_item(S.GROUP_OBJECTS_CTX_COPY, "", False)[0]:
+            self._link_clipboard = [self._capture(com_object, get_links)]
+        if imgui.menu_item(
+            S.GROUP_OBJECTS_CTX_PASTE, "", False, bool(self._link_clipboard)
+        )[0]:
+            self._apply(device, com_object, self._link_clipboard[0])
+        db_id = com_object.db_id
+        addresses = [text for _aid, _ga, text, _s in get_links(db_id)] if db_id else []
+        if imgui.menu_item(S.GROUP_OBJECTS_CTX_COPY_TEXT, "", False, bool(addresses))[
+            0
+        ]:
+            imgui.set_clipboard_text("\n".join(addresses))
+        imgui.end_popup()
 
     def _render_create_new(self, device: Device, com_object: ComObject) -> None:
         """Quick-create section at the top of the '+' popup: a recommended new group address (next

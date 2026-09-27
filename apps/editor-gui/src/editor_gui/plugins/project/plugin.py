@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from editor_gui.plugins.base import Logger, PanelDefinition, PluginAPI
 from editor_gui.plugins.project.program_queue import ProgramQueue, QueueItem
+from editor_gui.plugins.project.service import DeviceConfigClipboard
 from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui import (
     ConfigurePanel,
@@ -92,6 +93,8 @@ class ProjectPlugin:
         # the async loop thread's done-callback, read on the UI thread -> guarded by a lock.
         self._device_readouts: dict[int, DeviceOverview] = {}
         self._readout_lock = threading.Lock()
+        # Copied device configuration (params + GA links) for "Paste configuration".
+        self._device_config_clipboard: DeviceConfigClipboard | None = None
 
         self._devices_panel = DevicesPanel(
             get_devices=lambda: api.project.devices,
@@ -105,11 +108,15 @@ class ProjectPlugin:
             on_create_line=self._on_create_line,
             on_remove_line=self._on_remove_line,
             on_rename_line=self._on_rename_line,
-            on_clone_device=self._on_clone_device,
             get_selected_node_id=self._selected_node_id,
             on_select_devices=self._on_select_devices,
             get_selected_node_ids=lambda: api.project.selected_node_ids,
             on_delete_device=self._on_delete_device,
+            on_copy_config=self._on_copy_config,
+            on_paste_config=self._on_paste_config,
+            on_duplicate_config=self._on_duplicate_config,
+            can_paste_config=self._can_paste_config,
+            count_paste_targets=self._count_paste_targets,
         )
 
         self._configure_panel = ConfigurePanel(
@@ -146,6 +153,8 @@ class ProjectPlugin:
             next_free_sub=self._next_free_sub,
             get_ga_range_tree=api.project.get_group_range_tree,
             render_dali=self._render_dali_tab,
+            on_navigate_ga=self._navigate_to_group_address,
+            on_paste_links=self._paste_com_object_links,
         )
         self._dali_panel = DaliCommissioningPanel(self._run_dali)
 
@@ -182,6 +191,11 @@ class ProjectPlugin:
             on_remove_space=api.project.remove_space,
             on_set_device_space=api.project.set_device_space,
             get_unassigned_devices=api.project.get_unassigned_devices,
+            on_copy_config=self._on_copy_config,
+            on_paste_config=self._on_paste_config,
+            on_duplicate_config=self._on_duplicate_config,
+            can_paste_config=self._can_paste_config,
+            count_paste_targets=self._count_paste_targets,
         )
 
         self._project_info_panel = ProjectInfoPanel(
@@ -296,8 +310,62 @@ class ProjectPlugin:
         """Devices-tree multi-selection: set the full set + the primary (last-clicked) device."""
         self._api.project.set_multi_selection(primary.node_id, node_ids)
 
-    def _on_clone_device(self, device: "Device") -> None:
-        self._api.project.clone_device(device.node_id)
+    def _on_copy_config(self, node_id: int) -> None:
+        clip = self._api.project.copy_device_config(node_id)
+        if clip is not None:
+            self._device_config_clipboard = clip
+
+    def _can_paste_config(self, node_id: int) -> bool:
+        clip = self._device_config_clipboard
+        if clip is None:
+            return False
+        device = self._api.project.find_device_by_node_id(node_id)
+        return device is not None and getattr(device.app, "id", None) == clip.app_id
+
+    def _paste_config_targets(self, node_id: int) -> list[int]:
+        """Devices a paste onto ``node_id`` should reach: the whole multi-selection when the clicked
+        device is part of it, otherwise just that device. Filtered to devices whose application
+        matches the clipboard (paste_device_config is a no-op for a mismatched app)."""
+        clip = self._device_config_clipboard
+        if clip is None:
+            return []
+        selected = self._api.project.selected_node_ids
+        candidates = (
+            selected if node_id in selected and len(selected) > 1 else {node_id}
+        )
+        targets: list[int] = []
+        for nid in candidates:
+            device = self._api.project.find_device_by_node_id(nid)
+            if device is not None and getattr(device.app, "id", None) == clip.app_id:
+                targets.append(nid)
+        return targets
+
+    def _count_paste_targets(self, node_id: int) -> int:
+        return len(self._paste_config_targets(node_id))
+
+    def _on_paste_config(
+        self, node_id: int, include_params: bool, include_links: bool
+    ) -> None:
+        clip = self._device_config_clipboard
+        if clip is None:
+            return
+        for nid in self._paste_config_targets(node_id):
+            self._api.project.paste_device_config(
+                nid,
+                clip,
+                include_params=include_params,
+                include_links=include_links,
+            )
+
+    def _on_duplicate_config(
+        self, node_id: int, include_params: bool, include_links: bool
+    ) -> None:
+        self._api.project.clone_device(
+            node_id,
+            1,
+            include_params=include_params,
+            include_links=include_links,
+        )
 
     def _on_delete_device(self, device: "Device") -> None:
         node_id = device.node_id
@@ -360,6 +428,9 @@ class ProjectPlugin:
         device = self._api.project.find_device_by_node_id(node_id)
         if device is not None:
             self._api.project.selected_device = device
+            # Bring the editor to the front so the jump target is visible (e.g. from the GA
+            # assignment list or a Health finding).
+            self._api.project.focus_editor()
 
     def _selected_node_id(self) -> int | None:
         """Node id of the globally selected device (Tools/Mass Linker 'selected device' scope)."""
@@ -583,6 +654,11 @@ class ProjectPlugin:
                 result.append((link.id, link.group_address_id, text, link.is_sending))
         return result
 
+    def _navigate_to_group_address(self, ga_id: int) -> None:
+        # Select the clicked link's group address in the Group Addresses tree and bring it to front.
+        self._api.project.request_group_address(ga_id)
+        self._api.project.focus_group_addresses()
+
     def _all_group_addresses(self) -> list[tuple[int, str]]:
         # Include the name so the link picker shows it and can be filtered by name, not just address.
         return [
@@ -596,6 +672,33 @@ class ProjectPlugin:
         self._api.project.link_com_object_to_ga(
             com_object_db_id, group_address_id, is_sending=not existing
         )
+
+    def _paste_com_object_links(
+        self, target_db_id: int, links: list[tuple[int, bool]], replace: bool
+    ) -> None:
+        # Assign the copied links to the target, preserving sending/receiving. Replace clears the
+        # target's current links first; merge keeps them and only adds GAs not already linked (and
+        # only sets a sending link if the target has none yet).
+        existing = self._api.project.get_links_for_com_object(target_db_id)
+        if replace:
+            for a in existing:
+                self._api.project.unlink_com_object_from_ga(a.id)
+            for ga_id, is_sending in links:
+                self._api.project.link_com_object_to_ga(
+                    target_db_id, ga_id, is_sending=is_sending
+                )
+            return
+        linked_gas = {a.group_address_id for a in existing}
+        has_sender = any(a.is_sending for a in existing)
+        for ga_id, is_sending in links:
+            if ga_id in linked_gas:
+                continue
+            sending = is_sending and not has_sender
+            self._api.project.link_com_object_to_ga(
+                target_db_id, ga_id, is_sending=sending
+            )
+            linked_gas.add(ga_id)
+            has_sender = has_sender or sending
 
     def _auto_create_gas(
         self,

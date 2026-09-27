@@ -58,6 +58,9 @@ class GroupAddressesPanel:
         self._take_requested_ga = take_requested_ga
         self._filter_text: str = ""
         self._selected_ga_id: int | None = None
+        # When set (from an external navigation request), the tree force-opens the ancestor folders
+        # of this GA and scrolls to it for one frame, then clears it.
+        self._reveal_ga_id: int | None = None
         self._selected_ga_text: str = ""
         self._selected_ga_description: str = ""
         self._selected_ga_comment: str = ""
@@ -85,6 +88,7 @@ class GroupAddressesPanel:
             requested = self._take_requested_ga()
             if requested is not None:
                 self._selected_ga_id = requested
+                self._reveal_ga_id = requested
 
         if imgui.begin_popup_context_window("##ga_context"):
             self._render_create_menu_items()
@@ -151,6 +155,8 @@ class GroupAddressesPanel:
             for node in tree:
                 self._render_range(node, flt, is_root=True)
         imgui.end_child()
+        # Reveal is a one-frame action: ancestors were force-opened and the GA scrolled into view.
+        self._reveal_ga_id = None
 
         imgui.separator()
         self._render_assignments()
@@ -176,6 +182,11 @@ class GroupAddressesPanel:
         )
         if flt:
             imgui.set_next_item_open(True, imgui.Cond_.always)
+        elif self._reveal_ga_id is not None and self._range_contains_ga(
+            node, self._reveal_ga_id
+        ):
+            # Force-open the folders on the path to a GA we were asked to reveal.
+            imgui.set_next_item_open(True, imgui.Cond_.always)
         # Collapsed by default; a filter still force-opens matching ranges (above).
         open_node = imgui.tree_node_ex(label)
         self._render_range_context_menu(node, is_root)
@@ -193,6 +204,8 @@ class GroupAddressesPanel:
                 self._selected_ga_text = f"{ga.text}  {ga.name}"
                 self._selected_ga_description = ga.description
                 self._selected_ga_comment = ga.comment
+            if ga.id == self._reveal_ga_id:
+                imgui.set_scroll_here_y()
             self._render_ga_context_menu(ga)
         imgui.tree_pop()
 
@@ -206,6 +219,11 @@ class GroupAddressesPanel:
         if any(self._ga_matches(ga, flt) for ga in node.group_addresses):
             return True
         return any(self._range_has_match(child, flt) for child in node.children)
+
+    def _range_contains_ga(self, node: "GroupRangeInfo", ga_id: int) -> bool:
+        if any(ga.id == ga_id for ga in node.group_addresses):
+            return True
+        return any(self._range_contains_ga(child, ga_id) for child in node.children)
 
     def _render_ga_context_menu(self, ga: object) -> None:
         # ga is a core GroupAddressInfo (id, text, name, datapoint_type, …).
