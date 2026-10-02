@@ -3,6 +3,24 @@ setlocal enableextensions
 rem XKNX-Editor installer: copies this folder to Program Files, creates a desktop shortcut,
 rem and starts the app once. Run it from the extracted "XKNX-Editor" folder (double-click).
 
+set "SRC=%~dp0"
+set "DEST=%ProgramFiles%\XKNX-Editor"
+set "EXE=%DEST%\XKNX-Editor.exe"
+
+rem This installer must sit next to the app files. When it is started from inside an archive
+rem viewer (WinRAR / the ZIP preview) only the .bat is unpacked to a temp folder, so the copy
+rem below would silently copy nothing. Fail early with a clear instruction instead.
+if not exist "%SRC%XKNX-Editor.exe" (
+    echo FEHLER: XKNX-Editor.exe wurde neben dieser install.bat nicht gefunden.
+    echo(
+    echo Bitte das ZIP ZUERST vollstaendig entpacken ^(Rechtsklick ^> "Alle extrahieren"^)
+    echo und install.bat dann aus dem entpackten Ordner starten. Nicht direkt aus WinRAR
+    echo oder der ZIP-Vorschau heraus ausfuehren.
+    echo(
+    pause
+    exit /b 1
+)
+
 rem --- need admin to write to Program Files: re-launch elevated if we are not ---
 net session >nul 2>&1
 if %errorlevel% neq 0 (
@@ -11,10 +29,6 @@ if %errorlevel% neq 0 (
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     exit /b
 )
-
-set "SRC=%~dp0"
-set "DEST=%ProgramFiles%\XKNX-Editor"
-set "EXE=%DEST%\XKNX-Editor.exe"
 
 echo(
 echo XKNX-Editor wird installiert nach:
@@ -26,6 +40,13 @@ rem robocopy: copy everything except this installer; exit codes 0-7 mean success
 robocopy "%SRC%." "%DEST%" /E /NFL /NDL /NJH /NJS /NC /NS /XF install.bat >nul
 if %errorlevel% geq 8 (
     echo FEHLER beim Kopieren der Dateien. Installation abgebrochen.
+    pause
+    exit /b 1
+)
+
+rem robocopy reports success even when it copied nothing, so confirm the app actually landed.
+if not exist "%EXE%" (
+    echo FEHLER: "%EXE%" wurde nach dem Kopieren nicht gefunden. Installation abgebrochen.
     pause
     exit /b 1
 )

@@ -1,6 +1,12 @@
 """Core project domain: a SQLite-backed store mutated via a command/event log."""
 
 from xknxeditor.proj.core.event_store import EventStore
+from xknxeditor.proj.core.ga_export import (
+    GaExport,
+    import_ga_export,
+    is_ga_export,
+    read_ga_export,
+)
 from xknxeditor.proj.core.key_extract import (
     DLL_NAME,
     TRACE_DLL_NAME,
@@ -46,6 +52,7 @@ __all__ = [
     "TRACE_DLL_NAME",
     "EventStore",
     "ExportResult",
+    "GaExport",
     "KeyExtractionError",
     "MyKnxError",
     "ProjectService",
@@ -61,9 +68,12 @@ __all__ = [
     "extraction_backend",
     "fetch_master_xml",
     "fetch_myknx_products",
+    "import_ga_export",
     "import_knxproj",
     "is_encrypted",
+    "is_ga_export",
     "myknx_certificate_signer",
+    "read_ga_export",
     "read_master_xml",
     "reset_signing_key",
     "reset_trace_key",

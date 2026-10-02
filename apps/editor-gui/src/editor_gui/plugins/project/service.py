@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from editor_gui.concurrency import io_guarded, revision_cached
 from editor_gui.device import Device
@@ -24,7 +24,9 @@ from xknxeditor.prod import Application
 from xknxeditor.prod.app_id import parse_app_id
 from xknxeditor.proj import ProjectService as _ProjectService
 from xknxeditor.proj import ProjectStorageError, ensure_sqlite_writable
+from xknxeditor.proj import import_ga_export as _import_ga_export
 from xknxeditor.proj import import_knxproj as _import_knxproj
+from xknxeditor.proj import is_ga_export as _is_ga_export
 from xknxeditor.proj.core.addressing import GroupAddressStyle, parse_ga
 from xknxeditor.proj.core.identity import qualified_com_object_ref
 from xknxeditor.proj.core.skeleton import MEDIUM_TP
@@ -745,6 +747,41 @@ class ProjectService:
             self.open(dest)
         self._log.info("project imported", source=str(source), path=str(dest))
 
+    @staticmethod
+    def is_ga_export(path: Path) -> bool:
+        """Whether ``path`` is an ETS group-address export (routed to import_ga_export)."""
+        return _is_ga_export(path)
+
+    def import_ga_export(self, source: Path, dest: Path) -> None:
+        """Import a GA export (``ga-export/01`` XML) into a new project at ``dest`` and open it.
+
+        A GA export carries only the group-address tree (no devices, topology or product
+        data), so there is no catalog ingest and no password - unlike import_knxproj. The
+        build goes into a sibling temp file and is atomically swapped into place, so the
+        currently-open project keeps reading until the import is complete."""
+        if not dest.suffix:
+            dest = dest.with_suffix(".xknx")
+        working = self._mirror_path(dest) if self._needs_mirror(dest) else dest
+        with self._io_lock:
+            self._log.debug("importing ga export", source=str(source), dest=str(dest))
+            tmp = working.with_name(f"{working.name}.import-{os.getpid()}.tmp")
+            try:
+                # Name the project after the user-chosen dest, not the temp file we build into.
+                _import_ga_export(source, tmp, project_name=dest.stem)
+                if (
+                    self._working_path is not None
+                    and self._working_path.resolve() == working.resolve()
+                ):
+                    self._teardown_current()
+                os.replace(tmp, working)
+                # Drop a stale DELETE-mode journal left by a prior db at this path, so SQLite can't
+                # replay a foreign journal into the freshly imported file on open (see _copy_atomic).
+                Path(f"{working}-journal").unlink(missing_ok=True)
+            finally:
+                Path(tmp).unlink(missing_ok=True)
+            self.open(dest)
+        self._log.info("ga export imported", source=str(source), path=str(dest))
+
     def close(self) -> None:
         if self._pid is not None:
             with self._io_lock:
@@ -1330,13 +1367,25 @@ class ProjectService:
     @io_guarded(lambda: None)
     def get_device_info(self, node_id: int) -> "DeviceInfo | None":
         """Descriptive device metadata (manufacturer/order number/hardware/description) from the
-        imported project, independent of catalog resolution."""
+        imported project, independent of catalog resolution.
+
+        Cached by revision per node id. The Configure panel reads this every frame; an uncached read
+        there is a 60 Hz SQLite query that both churns the CPU and, when a background writer (import,
+        download) holds the database lock, can raise ``database is locked`` straight out of the render
+        loop. @revision_cached only memoises zero-arg reads, so this keys the shared revision cache by
+        node id itself; the dict is cleared on project open/close like the other per-frame caches."""
         if self._pid is None:
             return None
+        cache_key = f"get_device_info:{node_id}"
+        hit = self._revision_cache.get(cache_key)
+        if hit is not None and hit[0] == self.revision:
+            return cast("DeviceInfo | None", hit[1])
         try:
-            return self._svc.device(self._pid, node_id)
+            info = self._svc.device(self._pid, node_id)
         except KeyError:
-            return None
+            info = None
+        self._revision_cache[cache_key] = (self.revision, info)
+        return info
 
     def set_device_commissioning(
         self,
@@ -2228,11 +2277,49 @@ class ProjectService:
     ) -> int | None:
         if self._pid is None:
             return None
+        derive = self._dpt_to_derive_on_link(com_object_id, group_address_id)
         link_id = self._svc.link_com_object(
-            self._pid, com_object_id, group_address_id, sending=is_sending
+            self._pid,
+            com_object_id,
+            group_address_id,
+            sending=is_sending,
+            derive_datapoint_type=derive,
         )
         self._bump(structural=False)
         return link_id
+
+    def _com_object_dpt_token(self, co_db_id: int) -> str | None:
+        """The ETS DPT token of a com-object (resolved via the cached device view-models)."""
+        for d in self.devices:
+            for co in d.com_objects:
+                if co.db_id == co_db_id:
+                    return co.dpt.token
+        return None
+
+    def _dpt_to_derive_on_link(
+        self, com_object_id: int, group_address_id: int
+    ) -> str | None:
+        """DPT token to type the group address with on link, as ETS does, or ``None`` to leave it.
+
+        Only an empty group-address DPT is filled; a differing existing one is kept (and logged),
+        never overwritten.
+        """
+        token = self._com_object_dpt_token(com_object_id)
+        if not token:
+            return None
+        ga = self.get_group_address(group_address_id)
+        if ga is None:
+            return None
+        if not ga.datapoint_type:
+            return token
+        if ga.datapoint_type != token:
+            self._log.warning(
+                "linked com-object DPT differs from group address DPT; keeping existing",
+                group_address=ga.address,
+                existing=ga.datapoint_type,
+                com_object=token,
+            )
+        return None
 
     def unlink_com_object_from_ga(
         self,

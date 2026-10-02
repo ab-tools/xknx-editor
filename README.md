@@ -52,6 +52,12 @@ compatibility checks, and every change has full undo/redo.
 in ETS. Exports bundle the required product data so the project is self-contained, are signed so ETS
 accepts them. Based on [XKNXPRoject](https://github.com/XKNX/xknxproject) and [OpenKNXProducer](https://github.com/OpenKNX/OpenKNXproducer)
 
+The **Open Project** dialog accepts three formats and routes each automatically: an XKNX project
+(`.xknx`), an ETS project archive (`.knxproj`, imported into a new project), and an ETS group-address
+export (`.xml`, `ga-export/01`). A group-address export carries only the group-address tree (main and
+middle group folders with their addresses and datapoint types, no devices); it is imported into a new
+project whose group-address tree mirrors the export.
+
 ![Import and export](docs/images/import-export.png)
 
 **Product catalog** — import product files into a searchable catalog of manufacturers, hardware, and
