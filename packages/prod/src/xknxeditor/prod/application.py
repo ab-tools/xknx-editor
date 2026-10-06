@@ -7,7 +7,7 @@ views: code, load procedures, dynamic UI.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from xknxeditor.namespaces import detect_version
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     )
     from xknxeditor.namespaces.intermediate.load_procedures_t import LoadProcedures
 
-    from .parser_v2.dynamic import DynamicUI
+    from .parser_v2.dynamic import DynamicTreeBuilder, DynamicUI
 
 
 @dataclass(slots=True)
@@ -37,6 +37,9 @@ class Application:
     program: ApplicationProgram
     version: str
     manufacturer_id: str
+    _tree_builder: DynamicTreeBuilder | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def id(self) -> str:
@@ -58,13 +61,25 @@ class Application:
     def load_procedure_style(self) -> LoadProcedureStyle | None:
         return self.program.load_procedure_style
 
+    def tree_builder(self) -> DynamicTreeBuilder:
+        """Cached eval-tree builder (indexer + node tree) for this program.
+
+        It depends only on the program, not on any device's parameter/com-object instances, so it is
+        built once and shared read-only across every device of this application. Building it per
+        device dominates large-project import (~86% of per-device cost)."""
+        if self._tree_builder is None:
+            from .parser_v2.dynamic import DynamicTreeBuilder as _DynamicTreeBuilder
+
+            self._tree_builder = _DynamicTreeBuilder(self.program)
+        return self._tree_builder
+
     def dynamic_ui(self) -> DynamicUI | None:
         """Build a new caller-owned DynamicUI (with its own GlobalState), or None if no dynamic section."""
         if self.program.dynamic is None:
             return None
         from .parser_v2.dynamic import DynamicUI as _DynamicUI
 
-        return _DynamicUI(self.program)
+        return _DynamicUI(self.program, tree_builder=self.tree_builder())
 
 
 def _programs(knx: Knx) -> Iterator[ApplicationProgram]:

@@ -58,6 +58,7 @@ from xknxeditor.namespaces.intermediate.ld_ctrl_load_image_rel_mem_t import (
     LdCtrlLoadImageRelMem,
 )
 from xknxeditor.namespaces.intermediate.ld_ctrl_load_t import LdCtrlLoad
+from xknxeditor.namespaces.intermediate.ld_ctrl_map_error_t import LdCtrlMapError
 from xknxeditor.namespaces.intermediate.ld_ctrl_master_reset_t import LdCtrlMasterReset
 from xknxeditor.namespaces.intermediate.ld_ctrl_mem_addr_space_t import (
     LdCtrlMemAddrSpace,
@@ -81,6 +82,7 @@ from .crc import segment_crc
 from .errors import (
     DownloadError,
     ImageError,
+    PropertyAccessRejected,
     UnsupportedProcedureError,
     VerificationError,
 )
@@ -110,6 +112,13 @@ _MCB_ENTRY_SIZE = 8
 # The Router interface object (a line/backbone coupler): its relative memory holds the group-address
 # filter table (System B), carried as the image's dedicated filter-table field.
 _ROUTER_OBJECT_TYPE = 6
+
+# Top bit of a load-procedure error value (the Original/Mapped fields of
+# LdCtrlMapError): set means failure, clear means success. Mapping an error to a
+# value with this bit clear turns a rejected access into a tolerated one. These
+# 32-bit values and the flag convention are the tool's load-procedure
+# representation, not a bus error code (see .references/ets_map.md).
+_ERROR_FLAG = 0x80000000
 
 
 def _bytes_match(
@@ -222,7 +231,6 @@ def _mcb_table_with_crc(data: bytes, segment: bytes) -> bytes:
 _CLIENT_SIDE = (
     "LdCtrlMaxLength",
     "LdCtrlSetControlVariable",
-    "LdCtrlMapError",
     "LdCtrlProgressText",
     "LdCtrlClearCachedObjectTypes",
     "LdCtrlDeclarePropDesc",
@@ -261,6 +269,8 @@ _SUPPORTED_CONTROLS = frozenset(
         "LdCtrlTaskPtr",
         "LdCtrlTaskCtrl1",
         "LdCtrlTaskCtrl2",
+        # Arms/resets error tolerance around a bracketed access (see _execute).
+        "LdCtrlMapError",
         # xsdata class name (type(control).__name__), not the XML "LdCtrlClearLCFilterTable".
         "LdCtrlClearLcfilterTable",
     }
@@ -338,6 +348,11 @@ class LoadProcedureRunner:
         self._descriptor_checked = False
         self._negotiated_apdu: int | None = None
         self._authorize_levels = authorize_levels
+        # Load-procedure error values currently mapped to success by an
+        # LdCtrlMapError bracket; a property write the device rejects (0 elements)
+        # is tolerated instead of aborting the download when the error it reports
+        # is in this set.
+        self._tolerated_errors: set[int] = set()
         self._controls = (
             list(controls)
             if controls is not None
@@ -364,7 +379,24 @@ class LoadProcedureRunner:
         )
         for done, control in enumerate(in_scope, start=1):
             self._position = (done, total)
-            await self._execute(control)
+            try:
+                await self._execute(control)
+            except PropertyAccessRejected as rejection:
+                # An LdCtrlMapError bracket can map the error a rejected write
+                # reports (write to a protected or non-existing resource) to
+                # success (MappedError=0), making an access the device rejects
+                # (0 elements) optional - e.g. an unload of an interface object a
+                # given device variant does not carry. Tolerate it only while that
+                # specific error is armed; otherwise the rejection is a real failure.
+                if rejection.error_code not in self._tolerated_errors:
+                    raise
+                logger.info(
+                    "tolerating rejected access at load control %d/%d (%s) under "
+                    "an active error mapping",
+                    done,
+                    total,
+                    type(control).__name__,
+                )
             if progress is not None:
                 progress(done, total)
         self._position = None
@@ -751,6 +783,22 @@ class LoadProcedureRunner:
             # does not perform. The filter-table bytes themselves must be supplied in the
             # image (see GroupCommunication.filter_table); otherwise the following
             # WriteRelMem/WriteMem fails with "no image data".
+            return
+        if isinstance(control, LdCtrlMapError):
+            # Arm or reset tolerance of a specific error. The mapped value carries
+            # the error flag in its top bit; mapping an error to a value with that
+            # bit clear (0) turns the following access into a success, so the
+            # bracketed access becomes optional. Any mapping that keeps the error
+            # flag set (ETS uses MappedError==OriginalError) restores the
+            # passthrough, so a later access with the same error still fails. The
+            # bracketed access reports its rejection as a PropertyAccessRejected,
+            # swallowed in run() only while its error is in the tolerated set. The
+            # LdCtrlFilter (lc code) is not modelled: the one rejection we raise
+            # maps to a single error, so matching that error is sufficient.
+            if control.mapped_error & _ERROR_FLAG:
+                self._tolerated_errors.discard(control.original_error)
+            else:
+                self._tolerated_errors.add(control.original_error)
             return
         if type(control).__name__ in _CLIENT_SIDE:
             return

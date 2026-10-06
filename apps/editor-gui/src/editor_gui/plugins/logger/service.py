@@ -31,6 +31,20 @@ _PACKAGE_LABELS: dict[str, str] = {
 }
 
 
+class _TeeStream:
+    def __init__(self, *streams: Any) -> None:
+        self._streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+
 class _StdlibBridgeHandler(logging.Handler):
     """Forwards stdlib log records from the ``xknxeditor.*`` packages into a :class:`LogService`."""
 
@@ -97,19 +111,11 @@ class LogService:
         return event_dict
 
     def _log_stream(self) -> Any:
-        """A stream structlog's PrintLogger can write to.
-
-        In a frozen windowed app (PyInstaller ``console=False``) there is no console, so
-        ``sys.stdout``/``sys.stderr`` are ``None`` — structlog then can't create its per-file lock
-        (``cannot create weak reference to 'NoneType'``). Fall back to a log file on disk, which is
-        also handy for diagnosing the frozen build. The in-app Logger panel gets its records from
-        ``_capture`` regardless of this stream.
-        """
-        stream = sys.stdout if sys.stdout is not None else sys.stderr
-        if stream is not None:
-            return stream
+        """A console-and-file stream for structlog's PrintLogger."""
         path = os.path.join(tempfile.gettempdir(), "xknx-editor.log")
-        return open(path, "a", encoding="utf-8", buffering=1)  # line-buffered
+        log_file = open(path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
+        stream = sys.stdout if sys.stdout is not None else sys.stderr
+        return log_file if stream is None else _TeeStream(stream, log_file)
 
     def _configure_structlog(self) -> None:
         structlog.configure(

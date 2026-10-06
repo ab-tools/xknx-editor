@@ -32,7 +32,11 @@ jobs:
             asset: XKNX-Editor-windows.zip
           # (The native ARM64 Windows build is a separate job below — it bundles software OpenGL,
           # because Windows-on-ARM is almost always a VM without a usable OpenGL driver.)
-          - os: ubuntu-latest
+          # Build on the OLDEST available LTS, not ubuntu-latest: a PyInstaller bundle only runs on
+          # a glibc >= the one it was built against, so building on an older glibc widens the set of
+          # user systems it runs on. (ubuntu-latest also auto-migrates to newer images over time,
+          # which would silently raise the glibc floor.)
+          - os: ubuntu-22.04
             asset: XKNX-Editor-linux.tar.gz
     steps:
       - uses: actions/checkout@v7
@@ -92,6 +96,17 @@ jobs:
         shell: pwsh
         working-directory: apps/editor-gui
         run: Copy-Item "tools\install.bat","tools\uninstall.bat" "dist\XKNX-Editor\" -Force
+
+      # A Linux ELF binary cannot embed an icon, so ship a user-local installer that registers a
+      # .desktop launcher + themed icon (the only way the desktop environment shows one). The icon
+      # itself is already bundled in the app assets (install.sh reads it from there), so we do not
+      # drop a loose PNG next to the binary.
+      - name: Add Linux installer to the bundle
+        if: runner.os == 'Linux'
+        working-directory: apps/editor-gui
+        run: |
+          cp tools/install.sh tools/uninstall.sh dist/XKNX-Editor/
+          chmod +x dist/XKNX-Editor/install.sh dist/XKNX-Editor/uninstall.sh
 
       # Bundle the build output into a single archive (the macOS .app, or the onedir folder).
       - name: Archive (macOS)

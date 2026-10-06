@@ -58,8 +58,8 @@ msgstr "Signaturschlüssel gespeichert."
 msgid "Reverted to the placeholder key."
 msgstr "Auf den Platzhalterschlüssel zurückgesetzt."
 
-msgid "No .NET runtime found. Install the .NET SDK (macOS: `brew install dotnet-sdk`) to extract the key, or paste it manually below."
-msgstr "Keine .NET-Laufzeit gefunden. Installieren Sie das .NET SDK (macOS: `brew install dotnet-sdk`), um den Schlüssel zu extrahieren, oder fügen Sie ihn unten manuell ein."
+msgid "No .NET runtime found. Install the .NET SDK (macOS: `brew install dotnet-sdk`; Fedora: `sudo dnf install dotnet-sdk-8.0`) to extract the key, or paste it manually below."
+msgstr "Keine .NET-Laufzeit gefunden. Installieren Sie das .NET SDK (macOS: `brew install dotnet-sdk`; Fedora: `sudo dnf install dotnet-sdk-8.0`), um den Schlüssel zu extrahieren, oder fügen Sie ihn unten manuell ein."
 
 msgid "The key is read from your own licensed ETS assembly and stored per-user, never in the project."
 msgstr "Der Schlüssel wird aus Ihrer eigenen lizenzierten ETS-Assembly gelesen und pro Benutzer gespeichert, niemals im Projekt."

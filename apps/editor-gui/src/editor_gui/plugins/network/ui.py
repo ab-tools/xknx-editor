@@ -47,6 +47,7 @@ class NetworkPanel:
         on_stop: Callable[[], None],
         on_clear: Callable[[], None],
         on_focus_source: Callable[[str], None],
+        is_connected: Callable[[], bool],
         get_ga_names: Callable[[], dict[int, str]] | None = None,
         get_ga_dpts: Callable[[], dict[int, str]] | None = None,
     ) -> None:
@@ -57,6 +58,7 @@ class NetworkPanel:
         self._on_stop = on_stop
         self._on_clear = on_clear
         self._on_focus_source = on_focus_source
+        self._is_connected = is_connected
         self._get_ga_names = get_ga_names
         self._get_ga_dpts = get_ga_dpts
         # Rebuilt once per table frame so per-row lookups don't hit the project service repeatedly.
@@ -71,10 +73,24 @@ class NetworkPanel:
 
     def render(self) -> None:
         self._render_toolbar()
+        # Nothing can be captured without a bus link: point the user at the Gateway menu instead of
+        # leaving an empty table that looks broken.
+        records = self._get_cemi_records() if self._show_cemi else self._get_telegrams()
+        if not records and not self._is_connected():
+            self._render_no_connection_hint()
+            return
         if self._show_cemi:
             self._render_cemi_table()
         else:
             self._render_table()
+
+    def _render_no_connection_hint(self) -> None:
+        imgui.dummy(imgui.ImVec2(0, 8))
+        imgui.push_style_color(
+            imgui.Col_.text, imgui.ImVec4(0.9, 0.7, 0.3, 1.0)
+        )  # amber
+        imgui.text_wrapped(S.NO_CONNECTION_HINT)
+        imgui.pop_style_color()
 
     def _apply_autoscroll(self) -> None:
         """Stick to the newest row as telegrams arrive, but stop once the user scrolls up.

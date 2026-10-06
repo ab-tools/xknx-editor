@@ -83,8 +83,9 @@ class SigningStrings:
     @property
     def NO_BACKEND(self) -> str:
         return _(
-            "No .NET runtime found. Install the .NET SDK (macOS: `brew install dotnet-sdk`) "
-            "to extract the key, or paste it manually below."
+            "No .NET runtime found. Install the .NET SDK (macOS: `brew install dotnet-sdk`; "
+            "Fedora: `sudo dnf install dotnet-sdk-8.0`) to extract the key, or paste it "
+            "manually below."
         )
 
     @property

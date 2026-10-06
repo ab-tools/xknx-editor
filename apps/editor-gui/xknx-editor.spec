@@ -86,6 +86,22 @@ a.binaries = [
     b for b in a.binaries if _os.path.basename(b[0]).lower() != "ucrtbase.dll"
 ]
 
+# Linux: do NOT ship our own libstdc++ / libgcc_s. PyInstaller already excludes the GL loader stack
+# (libGL/libEGL/libdrm/libxcb-dri) so the app uses the host's, but it still bundles the build
+# image's libstdc++.so.6 / libgcc_s.so.1. At runtime the host libGL loads the host Mesa DRI driver,
+# which needs a GLIBCXX newer than an old build image (Ubuntu 22.04) provides; the bundled, older
+# libstdc++ then shadows the host one and starves the driver, so GLX returns no FBConfig ("No
+# GLXFBConfigs returned") and no window is created. Dropping these makes the app use the host C++
+# runtime, which is by definition new enough for the host's own driver. The app ELF still links the
+# build glibc, so building on an older LTS keeps the lower glibc floor unchanged.
+if sys.platform == "linux":
+    import re as _re
+
+    _host_cxx = _re.compile(r"^(?:libstdc\+\+|libgcc_s)\.so")
+    a.binaries = [
+        b for b in a.binaries if not _host_cxx.match(_os.path.basename(b[0]))
+    ]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

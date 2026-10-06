@@ -18,3 +18,6 @@ msgstr "Opnemen"
 
 msgid "Recording"
 msgstr "Opname"
+
+msgid "No gateway connected yet. Connect one under \"Gateway\" to capture telegrams."
+msgstr "Nog geen gateway verbonden. Maak onder \"Gateway\" verbinding om telegrammen vast te leggen."

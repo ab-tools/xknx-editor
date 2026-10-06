@@ -42,7 +42,12 @@ from xknx.telegram.apci import (
 )
 
 from . import load_state
-from .errors import DownloadError, LoadStateError, VerificationError
+from .errors import (
+    DownloadError,
+    LoadStateError,
+    PropertyAccessRejected,
+    VerificationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -634,7 +639,7 @@ def _validate_property_response(
             f"expected object {object_index} property {property_id}"
         )
     if require_nonzero and payload.count == 0:
-        raise VerificationError(
+        raise PropertyAccessRejected(
             f"device rejected property {operation}: object {object_index} "
             f"property {property_id} returned 0 elements"
         )

@@ -21,3 +21,6 @@ msgstr "Aufnehmen"
 
 msgid "Recording"
 msgstr "Aufnahme"
+
+msgid "No gateway connected yet. Connect one under \"Gateway\" to capture telegrams."
+msgstr "Noch kein Gateway verbunden. Unter \"Gateway\" eine Verbindung herstellen, um Telegramme aufzuzeichnen."

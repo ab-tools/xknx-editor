@@ -223,6 +223,7 @@ class Device:
                 parameter_instance_refs=self.parameter_instance_refs or None,
                 module_instances=self.module_instances or None,
                 com_object_instance_refs=self.com_object_instance_refs or None,
+                tree_builder=self.app.tree_builder(),
             )
         return self._dynamic_ui
 

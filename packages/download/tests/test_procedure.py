@@ -13,7 +13,7 @@ from xknx.telegram.apci import (
     PropertyValueWrite,
 )
 
-from xknxeditor.download.errors import DownloadError
+from xknxeditor.download.errors import DownloadError, PropertyAccessRejected
 from xknxeditor.download.image import (
     DownloadImage,
     MemorySegment,
@@ -43,6 +43,7 @@ from xknxeditor.namespaces.intermediate.ld_ctrl_load_image_mem_t import (
     LdCtrlLoadImageMem,
 )
 from xknxeditor.namespaces.intermediate.ld_ctrl_load_t import LdCtrlLoad
+from xknxeditor.namespaces.intermediate.ld_ctrl_map_error_t import LdCtrlMapError
 from xknxeditor.namespaces.intermediate.ld_ctrl_master_reset_t import LdCtrlMasterReset
 from xknxeditor.namespaces.intermediate.ld_ctrl_read_function_prop_t import (
     LdCtrlReadFunctionProp,
@@ -1014,3 +1015,98 @@ async def test_compare_prop_truncation_respects_the_mask() -> None:
         application, DownloadImage(segments=(), properties=()), DeviceProgrammer(device)
     )
     await runner.run()  # must not raise: nothing checkable lies beyond the reply
+
+
+# Error the Zennio DIMinBOX ap1 procedure maps to success around an optional
+# unload of interface object 5 (absent on a PeiType 0 variant): ETS
+# HAWK_E_RESOURCE_WRITE_PROTECTED, reported for a write to a protected or
+# non-existing resource.
+_RESOURCE_WRITE_PROTECTED_ERROR = 3221498632
+
+
+def _empty_image() -> DownloadImage:
+    return DownloadImage(segments=(), properties=())
+
+
+async def test_map_error_tolerates_unload_of_absent_object() -> None:
+    # ap1 brackets the unload of object 5 with a MapError that maps the
+    # absent-object error to success, then resets it. The unload must be
+    # tolerated instead of aborting the download.
+    application = _application(
+        LdCtrlMapError(original_error=_RESOURCE_WRITE_PROTECTED_ERROR, mapped_error=0),
+        LdCtrlUnload(lsm_idx=5, occurrence=0),
+        LdCtrlMapError(
+            original_error=_RESOURCE_WRITE_PROTECTED_ERROR,
+            mapped_error=_RESOURCE_WRITE_PROTECTED_ERROR,
+        ),
+        LdCtrlUnload(lsm_idx=1, occurrence=0),
+    )
+    runner, device = _runner(application, _empty_image())
+    device.absent_objects = {5}
+
+    await runner.run()  # must not raise
+
+    assert 5 not in device.load_states  # the rejected write did not take
+    assert device.load_states[1] == LoadState.UNLOADED  # the present object unloaded
+
+
+async def test_unload_of_absent_object_without_mapping_fails() -> None:
+    # Without a MapError bracket, the same rejected unload is a real failure.
+    application = _application(LdCtrlUnload(lsm_idx=5, occurrence=0))
+    runner, device = _runner(application, _empty_image())
+    device.absent_objects = {5}
+
+    with pytest.raises(PropertyAccessRejected):
+        await runner.run()
+
+
+async def test_map_error_reset_rearms_the_failure() -> None:
+    # A MapError that maps the error back to itself resets tolerance, so a later
+    # unload of the absent object fails again.
+    application = _application(
+        LdCtrlMapError(original_error=_RESOURCE_WRITE_PROTECTED_ERROR, mapped_error=0),
+        LdCtrlMapError(
+            original_error=_RESOURCE_WRITE_PROTECTED_ERROR,
+            mapped_error=_RESOURCE_WRITE_PROTECTED_ERROR,
+        ),
+        LdCtrlUnload(lsm_idx=5, occurrence=0),
+    )
+    runner, device = _runner(application, _empty_image())
+    device.absent_objects = {5}
+
+    with pytest.raises(PropertyAccessRejected):
+        await runner.run()
+
+
+async def test_map_error_does_not_hide_a_different_rejected_object() -> None:
+    # The mapping tolerates the bracketed access only; a different object the
+    # device also rejects after the reset still fails.
+    application = _application(
+        LdCtrlMapError(original_error=_RESOURCE_WRITE_PROTECTED_ERROR, mapped_error=0),
+        LdCtrlUnload(lsm_idx=5, occurrence=0),
+        LdCtrlMapError(
+            original_error=_RESOURCE_WRITE_PROTECTED_ERROR,
+            mapped_error=_RESOURCE_WRITE_PROTECTED_ERROR,
+        ),
+        LdCtrlUnload(lsm_idx=6, occurrence=0),
+    )
+    runner, device = _runner(application, _empty_image())
+    device.absent_objects = {5, 6}
+
+    with pytest.raises(PropertyAccessRejected):
+        await runner.run()
+
+
+async def test_map_error_for_a_different_error_does_not_tolerate() -> None:
+    # A mapping armed for an unrelated error value must not swallow a rejection
+    # that reports a different error, even while the arm window is open.
+    application = _application(
+        LdCtrlMapError(original_error=0xC0000001, mapped_error=0),
+        LdCtrlUnload(lsm_idx=5, occurrence=0),
+        LdCtrlMapError(original_error=0xC0000001, mapped_error=0xC0000001),
+    )
+    runner, device = _runner(application, _empty_image())
+    device.absent_objects = {5}
+
+    with pytest.raises(PropertyAccessRejected):
+        await runner.run()

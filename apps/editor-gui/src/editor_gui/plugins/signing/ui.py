@@ -164,7 +164,10 @@ class SigningPanel:
         imgui.text_wrapped(S.PICK_HINT)
         backend = extraction_backend()
         if backend is None:
-            imgui.text_colored(_RED, S.NO_BACKEND)
+            # text_colored does not wrap; push the colour so text_wrapped handles the line break.
+            imgui.push_style_color(imgui.Col_.text, _RED)
+            imgui.text_wrapped(S.NO_BACKEND)
+            imgui.pop_style_color()
         if self._extracting:
             imgui.text_disabled(S.EXTRACTING)
         else:

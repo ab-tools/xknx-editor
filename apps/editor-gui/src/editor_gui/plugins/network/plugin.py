@@ -22,6 +22,7 @@ class NetworkPlugin:
             on_stop=self._service.stop,
             on_clear=self._service.clear,
             on_focus_source=self._on_focus_source,
+            is_connected=lambda: self._api.connection.xknx is not None,
             get_ga_names=self._ga_names,
             get_ga_dpts=self._ga_dpts,
         )

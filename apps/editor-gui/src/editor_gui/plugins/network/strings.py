@@ -27,5 +27,11 @@ class NetworkStrings(BaseStrings):
     def BTN_RECORDING(self) -> str:
         return _("Recording")
 
+    @property
+    def NO_CONNECTION_HINT(self) -> str:
+        return _(
+            'No gateway connected yet. Connect one under "Gateway" to capture telegrams.'
+        )
+
 
 S = NetworkStrings()

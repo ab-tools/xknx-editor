@@ -121,6 +121,14 @@ def import_knxproj(
     and :class:`~xknxproject.exceptions.UnexpectedFileContent` when the file is not a readable
     ``.knxproj`` archive. An existing ``dest`` is overwritten (an import is a fresh project).
     """
+    logger.debug(
+        "knxproj import entry",
+        extra={
+            "source": str(source),
+            "dest": str(dest),
+            "encrypted": password is not None,
+        },
+    )
     parser, extras = _parse_checked(source, password, language)
     # Capture the archive's own product data (signed master + manufacturer members) so a later export
     # can re-emit it verbatim; ETS re-issues product ids on import, so the catalog cannot resolve them.

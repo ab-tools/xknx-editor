@@ -66,6 +66,10 @@ class FakeDevice:
         # Access level the device grants for an A_Authorize, and the keys it saw.
         self.authorize_level = 0
         self.authorize_keys: list[int] = []
+        # Interface objects the device does not carry: a property write to one is
+        # rejected with a 0-element response, as a real device answers an access
+        # to an absent object. Used to exercise LdCtrlMapError tolerance.
+        self.absent_objects: set[int] = set()
         # Quirk emulation: when set, an A_Memory_Read requesting more than this many octets answers
         # with a ZERO-length MemoryResponse (as observed on BIM M112 / mask 0701), forcing the
         # reader to back the block size off. None = always serve the full requested count.
@@ -104,6 +108,17 @@ class FakeDevice:
                 UserMemoryResponse(address=payload.address, data=data)
             )
         if isinstance(payload, PropertyValueWrite):
+            # An absent object rejects the write with a 0-element response.
+            if payload.object_index in self.absent_objects:
+                return self._telegram(
+                    PropertyValueResponse(
+                        object_index=payload.object_index,
+                        property_id=payload.property_id,
+                        count=0,
+                        start_index=payload.start_index,
+                        data=b"",
+                    )
+                )
             # A_PropertyValue_Write is confirmed by a response carrying the
             # resulting value; apply the write, then answer with a read.
             self._handle_property_write(payload)

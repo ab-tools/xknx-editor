@@ -58,8 +58,8 @@ msgstr "Ondertekeningssleutel opgeslagen."
 msgid "Reverted to the placeholder key."
 msgstr "Teruggezet naar de plaatshoudersleutel."
 
-msgid "No .NET runtime found. Install the .NET SDK (macOS: `brew install dotnet-sdk`) to extract the key, or paste it manually below."
-msgstr "Geen .NET-runtime gevonden. Installeer de .NET SDK (macOS: `brew install dotnet-sdk`) om de sleutel te extraheren, of plak hem hieronder handmatig."
+msgid "No .NET runtime found. Install the .NET SDK (macOS: `brew install dotnet-sdk`; Fedora: `sudo dnf install dotnet-sdk-8.0`) to extract the key, or paste it manually below."
+msgstr "Geen .NET-runtime gevonden. Installeer de .NET SDK (macOS: `brew install dotnet-sdk`; Fedora: `sudo dnf install dotnet-sdk-8.0`) om de sleutel te extraheren, of plak hem hieronder handmatig."
 
 msgid "The key is read from your own licensed ETS assembly and stored per-user, never in the project."
 msgstr "De sleutel wordt gelezen uit uw eigen gelicentieerde ETS-assembly en per gebruiker opgeslagen, nooit in het project."

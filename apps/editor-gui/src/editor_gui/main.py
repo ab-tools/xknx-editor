@@ -1,5 +1,6 @@
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,49 @@ _COMPAT_ASSET = (
     else "XKNX-Editor-windows-softwaregl.zip"
 )
 _COMPAT_BUILD_URL = f"{_REPO_URL}/releases/latest/download/{_COMPAT_ASSET}"
+_LINUX_FILE_DIALOG_HELPERS = ("zenity", "kdialog", "matedialog", "qarma")
+
+
+def _find_linux_file_dialog_helper(path: str | None = None) -> str | None:
+    """Return the first portable-file-dialog helper available on ``path``."""
+    return next(
+        (
+            helper
+            for helper in _LINUX_FILE_DIALOG_HELPERS
+            if shutil.which(helper, path=path)
+        ),
+        None,
+    )
+
+
+def _restore_subprocess_library_path() -> None:
+    """PyInstaller's Linux bootloader prepends the bundle directory to ``LD_LIBRARY_PATH`` and saves
+    the caller's original value as ``LD_LIBRARY_PATH_ORIG``. External binaries the app spawns (the
+    zenity/kdialog file-dialog helpers, the MCP subprocess) otherwise inherit the bundle's libraries
+    and fail to start, which looks like a file dialog that never opens. Restore the original path so
+    child processes see the system libraries; the GUI's own native libraries are already loaded."""
+    if not getattr(sys, "frozen", False) or sys.platform != "linux":
+        return
+    original = os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+    if original:
+        os.environ["LD_LIBRARY_PATH"] = original
+    else:
+        os.environ.pop("LD_LIBRARY_PATH", None)
+
+
+def _linux_display_env() -> dict[str, str]:
+    """Snapshot the display/sandbox variables that decide whether a file-dialog helper can show a
+    window. A helper present on PATH but unable to reach a display server returns no selection, which
+    looks like 'nothing happens'; logging this on an empty result pins the cause without a repro."""
+    return {
+        "helper": _find_linux_file_dialog_helper() or "none",
+        "session_type": os.environ.get("XDG_SESSION_TYPE", ""),
+        "display": os.environ.get("DISPLAY", ""),
+        "wayland_display": os.environ.get("WAYLAND_DISPLAY", ""),
+        "flatpak": os.environ.get("FLATPAK_ID", ""),
+        "snap": os.environ.get("SNAP", ""),
+        "appimage": os.environ.get("APPIMAGE", ""),
+    }
 
 
 def _github_release_api_url(url: str) -> str | None:
@@ -182,6 +226,7 @@ class KnxGuiApp:
         self._import_ga_export_source: str | None = None
         self._export_knxproj_dialog: pfd.save_file | None = None
         self._last_export_path: str | None = None
+        self._file_dialogs_available: bool | None = None
         # Overwrite guard: the portable file dialog does not confirm replacing an existing file on
         # macOS (it wraps AppleScript's "choose file name"), so we ask here. Requests queue as
         # (target, action) pairs so a second dialog resolving mid-confirmation cannot drop the first.
@@ -355,6 +400,7 @@ class KnxGuiApp:
 
     def setup(self) -> None:
         self._log.info("editor started")
+        self._can_launch_file_dialog()
         # Apply a previously extracted/saved signing key so exports are signed with it.
         if signing_key_store.apply_cached_key():
             self._log.info("signing key loaded")
@@ -440,6 +486,8 @@ class KnxGuiApp:
         save_settings("app", data)
 
     def _new_project(self) -> None:
+        if not self._can_launch_file_dialog():
+            return
         self._save_project_dialog = pfd.save_file(
             S.FILE_DIALOG_PROJECT_SAVE_TITLE,
             "",
@@ -447,7 +495,7 @@ class KnxGuiApp:
         )
 
     def _save_as(self) -> None:
-        if not self._project_service.is_open:
+        if not self._project_service.is_open or not self._can_launch_file_dialog():
             return
         self._save_as_dialog = pfd.save_file(
             S.FILE_DIALOG_SAVE_AS_TITLE,
@@ -456,8 +504,11 @@ class KnxGuiApp:
         )
 
     def _open_project(self) -> None:
+        if not self._can_launch_file_dialog():
+            return
         # Accept .knxproj and .xml here too: _do_open_project routes .knxproj archives and ETS
         # group-address exports (ga-export/01 .xml) through their importers.
+        self._log.debug("opening project file dialog")
         self._open_project_dialog = pfd.open_file(
             S.FILE_DIALOG_PROJECT_TITLE,
             "",
@@ -474,9 +525,25 @@ class KnxGuiApp:
                 "*",
             ],
         )
+        self._log.debug("project file dialog opened")
+
+    def _can_launch_file_dialog(self) -> bool:
+        if sys.platform != "linux":
+            return True
+        if self._file_dialogs_available is None:
+            helper = _find_linux_file_dialog_helper()
+            self._file_dialogs_available = helper is not None
+            if helper is None:
+                self._log.error(
+                    "file dialog unavailable",
+                    error="Install a file-dialog helper such as zenity or kdialog, then restart the app.",
+                )
+            else:
+                self._log.debug("file dialog helper found", helper=helper)
+        return self._file_dialogs_available
 
     def _export_knxproj(self) -> None:
-        if not self._project_service.is_open:
+        if not self._project_service.is_open or not self._can_launch_file_dialog():
             return
         default = "project.knxproj"
         if self._project_service.path is not None:
@@ -830,6 +897,7 @@ class KnxGuiApp:
         return self._myknx_selected_pid
 
     def _do_import_knxproj(self, source: str, dest: str) -> None:
+        self._log.info("knxproj import requested", source=source, dest=dest)
         self._import_knxproj_source = source
         self._import_knxproj_dest = dest
         # A network destination asks for consent (work on a local copy) before the import runs.
@@ -839,16 +907,35 @@ class KnxGuiApp:
         """Run the import on a worker thread so the UI stays responsive (the facade holds the shared
         lock, so per-frame reads bail to empty placeholders while it runs)."""
         source, dest = self._import_knxproj_source, self._import_knxproj_dest
-        if source is None or dest is None or self._import_thread is not None:
+        if source is None or dest is None:
+            self._log.warning(
+                "knxproj import not started",
+                source=source or "",
+                dest=dest or "",
+                reason="missing source or destination",
+            )
+            return
+        if self._import_thread is not None:
+            self._log.warning(
+                "knxproj import not started; worker busy",
+                source=source,
+                dest=dest,
+                thread=self._import_thread.name,
+                alive=self._import_thread.is_alive(),
+            )
             return
         self._log.info("importing knxproj", source=source, dest=dest)
         self._import_pw = password
         self._import_needs_password = False
         self._begin_progress(S.IMPORT_PROGRESS_TEXT)
         self._import_thread = threading.Thread(
-            target=self._run_import, args=(source, dest, password), daemon=True
+            target=self._run_import,
+            args=(source, dest, password),
+            daemon=True,
+            name="knxproj-import",
         )
         self._import_thread.start()
+        self._log.debug("knxproj import dispatched", thread=self._import_thread.name)
 
     def _run_import(self, source: str, dest: str, password: str | None) -> None:
         # Worker thread: only touches services + logging (never imgui). Outcome is read in
@@ -859,6 +946,7 @@ class KnxGuiApp:
         thread = self._import_thread
         if thread is None or thread.is_alive():
             return
+        self._log.debug("knxproj import worker finished", thread=thread.name)
         self._import_thread = None
         self._progress_running = False
         if self._import_needs_password:
@@ -892,6 +980,18 @@ class KnxGuiApp:
         """Run ``fn`` on a worker thread behind the progress modal. ``fn`` must hold the shared IO
         lock while it writes so per-frame UI reads bail (see ProjectService/CatalogService)."""
         if self._bg_thread is not None or self._import_thread is not None:
+            busy_threads: dict[str, Any] = {}
+            if self._bg_thread is not None:
+                busy_threads["background_thread"] = self._bg_thread.name
+                busy_threads["background_alive"] = self._bg_thread.is_alive()
+            if self._import_thread is not None:
+                busy_threads["import_thread"] = self._import_thread.name
+                busy_threads["import_alive"] = self._import_thread.is_alive()
+            self._log.warning(
+                "background task not started; worker busy",
+                task=text,
+                **busy_threads,
+            )
             return
         self._begin_progress(text)
 
@@ -903,11 +1003,19 @@ class KnxGuiApp:
                     "background task failed", error=f"{type(e).__name__}: {e}"
                 )
 
-        self._bg_thread = threading.Thread(target=worker, daemon=True)
+        self._bg_thread = threading.Thread(
+            target=worker, daemon=True, name="background-task"
+        )
         self._bg_thread.start()
+        self._log.debug(
+            "background task dispatched", task=text, thread=self._bg_thread.name
+        )
 
     def _poll_bg(self) -> None:
         if self._bg_thread is not None and not self._bg_thread.is_alive():
+            self._log.debug(
+                "background task worker finished", thread=self._bg_thread.name
+            )
             self._bg_thread = None
             self._progress_running = False
 
@@ -1206,19 +1314,42 @@ class KnxGuiApp:
         self._log.info("untitled project created", path=str(path))
 
     def _do_open_project(self, path: str) -> None:
+        suffix = Path(path).suffix.lower()
+        self._log.info(
+            "routing open project",
+            path=path,
+            is_knxproj=suffix == ".knxproj",
+            is_xml=suffix == ".xml",
+            is_xknx=suffix == ".xknx",
+        )
         # A .knxproj is a project archive, not an .xknx SQLite document. If one is picked here (a common
         # mix-up), route it through the importer instead of trying to open it as a database.
-        if path.lower().endswith(".knxproj"):
+        if suffix == ".knxproj":
+            self._log.info(
+                "open project route selected", path=path, route="knxproj import"
+            )
             self._prompt_import_dest(path)
             return
 
         # An ETS group-address export is a plain .xml holding only the GA tree. Detect it and route
         # it through its own importer (builds a new project whose GA tree mirrors the export).
-        if path.lower().endswith(".xml") and self._project_service.is_ga_export(
-            Path(path)
-        ):
-            self._prompt_ga_export_dest(path)
-            return
+        if suffix == ".xml":
+            is_ga_export = self._project_service.is_ga_export(Path(path))
+            self._log.debug(
+                "xml project classification", path=path, ga_export=is_ga_export
+            )
+            if is_ga_export:
+                self._log.info(
+                    "open project route selected", path=path, route="ga export import"
+                )
+                self._prompt_ga_export_dest(path)
+                return
+
+        self._log.info(
+            "open project route selected",
+            path=path,
+            route="xknx open" if suffix == ".xknx" else "project open",
+        )
 
         # A recent entry (or a startup default) may point at a file that was moved or deleted. Report
         # it clearly (a red toast via the error log) and drop it from the recent list, instead of
@@ -1261,17 +1392,23 @@ class KnxGuiApp:
 
     def _prompt_import_dest(self, source: str) -> None:
         """Remember the .knxproj source and ask where to save the imported .xknx project."""
+        if not self._can_launch_file_dialog():
+            return
         self._import_knxproj_source = source
         # Pass only the default file name, not a full path: on macOS a path with "/" in the save
         # dialog's name field gets mangled into ":"-separated segments.
+        self._log.debug("opening knxproj import destination dialog", source=source)
         self._import_knxproj_save_dialog = pfd.save_file(
             S.FILE_DIALOG_PROJECT_SAVE_TITLE,
             Path(source).with_suffix(".xknx").name,
             [S.FILE_DIALOG_PROJECT_FILTER, "*.xknx", S.FILE_DIALOG_ALL_FILES, "*"],
         )
+        self._log.debug("knxproj import destination dialog opened", source=source)
 
     def _prompt_ga_export_dest(self, source: str) -> None:
         """Remember the GA-export source and ask where to save the imported .xknx project."""
+        if not self._can_launch_file_dialog():
+            return
         self._import_ga_export_source = source
         self._import_ga_export_save_dialog = pfd.save_file(
             S.FILE_DIALOG_PROJECT_SAVE_TITLE,
@@ -1344,10 +1481,21 @@ class KnxGuiApp:
                 )
 
         if self._open_project_dialog is not None and self._open_project_dialog.ready():
+            self._log.debug("project file dialog ready")
             result = self._open_project_dialog.result()
+            self._log.info(
+                "project file dialog result", result=result[0] if result else ""
+            )
             self._open_project_dialog = None
             if result:
                 self._do_open_project(result[0])
+            elif sys.platform == "linux":
+                # Empty result on Linux usually means the helper could not display a window (no
+                # display server reachable), not a user cancel. Record the environment so the cause
+                # is visible in the log.
+                self._log.warning(
+                    "file dialog returned no selection", **_linux_display_env()
+                )
 
         if (
             self._export_knxproj_dialog is not None
@@ -1365,7 +1513,11 @@ class KnxGuiApp:
             self._import_knxproj_save_dialog is not None
             and self._import_knxproj_save_dialog.ready()
         ):
+            self._log.debug("knxproj import destination dialog ready")
             result = self._import_knxproj_save_dialog.result()
+            self._log.info(
+                "knxproj import destination dialog result", result=result or ""
+            )
             self._import_knxproj_save_dialog = None
             source = self._import_knxproj_source
             self._import_knxproj_source = None
@@ -1579,7 +1731,10 @@ class KnxGuiApp:
             )[0]:
                 self._export_knxproj()
             imgui.separator()
-            if imgui.menu_item(S.MENU_LOAD_KNXPROD, "", False)[0]:
+            if (
+                imgui.menu_item(S.MENU_LOAD_KNXPROD, "", False)[0]
+                and self._can_launch_file_dialog()
+            ):
                 self._open_file_dialog = pfd.open_file(
                     S.FILE_DIALOG_KNXPROD_TITLE,
                     "",
@@ -2580,6 +2735,10 @@ def main() -> None:
     # Before anything can reach the network: the packaged app's OpenSSL points at a trust store
     # that only exists on the build machine, so fall back to the bundled certifi (see certs.py).
     ensure_ca_bundle()
+
+    # Before spawning any external binary (file-dialog helpers, MCP subprocess): drop the frozen
+    # bundle's library path so children load system libraries, not PyInstaller's bundled ones.
+    _restore_subprocess_library_path()
 
     if "--profile" in sys.argv:
         import cProfile

@@ -645,6 +645,7 @@ class ProjectService:
         # run behind a progress spinner. Re-entrant, so our own nested reads still work.
         if not path.suffix:
             path = path.with_suffix(".xknx")
+        self._log.debug("project open requested", path=str(path))
         with self._io_lock:
             self._log.debug("opening project", path=str(path))
             # Tear down (and write back) the previous project BEFORE opening the new one. Two
@@ -698,6 +699,12 @@ class ProjectService:
         keeps reading the previous project (stable, no schema mutation) until the swap."""
         if not dest.suffix:
             dest = dest.with_suffix(".xknx")
+        self._log.debug(
+            "knxproj import requested",
+            source=str(source),
+            dest=str(dest),
+            encrypted=password is not None,
+        )
         # When ``dest`` is a network share, SQLite can't run there, so import into a local mirror and
         # write it back to ``dest`` on close (see open/_teardown_current). ``ensure_sqlite_writable``
         # still guards via make_engine if even the local mirror dir were unusable (never, in
@@ -731,6 +738,11 @@ class ProjectService:
                 # dest). On a wrong password this raises before writing, so the currently-open
                 # project is left untouched.
                 _import_knxproj(source, tmp, password=password)
+                self._log.debug(
+                    "knxproj parsed",
+                    source=str(source),
+                    temp=str(tmp),
+                )
                 # If we are overwriting the working file the live service currently has open, tear it
                 # down first so no engine holds its inode when we replace it (old-inode/new-file +
                 # pooled-connection hazard). A different working file needs no early close — open()
@@ -741,6 +753,7 @@ class ProjectService:
                 ):
                     self._teardown_current()
                 os.replace(tmp, working)
+                self._log.debug("knxproj installed", working=str(working))
             finally:
                 # Clean up the temp file if it survived a failure (a successful replace consumed it).
                 Path(tmp).unlink(missing_ok=True)
@@ -2490,7 +2503,12 @@ class ProjectService:
         self._bump()
 
     @io_guarded(list)
+    @revision_cached
     def history(self) -> list[HistoryEntry]:
+        # The History panel reads this every frame. Cache it by revision like the other per-frame
+        # panel reads (see get_device_info): an uncached 60 Hz SELECT contends with a background
+        # writer's connection — during an export it blocks the render loop (the "not responding"
+        # stall) and can raise "database is locked" straight out of the frame.
         if self._pid is None:
             return []
         return [

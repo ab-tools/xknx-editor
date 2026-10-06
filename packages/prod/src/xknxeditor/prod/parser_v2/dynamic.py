@@ -478,8 +478,12 @@ class DynamicUI:
         parameter_instance_refs: list[ParameterInstanceRef] | None = None,
         module_instances: list[ModuleInstance] | None = None,
         com_object_instance_refs: list[ComObjectInstanceRef] | None = None,
+        tree_builder: DynamicTreeBuilder | None = None,
     ) -> None:
-        builder = DynamicTreeBuilder(app)
+        # The builder (indexer + node tree) is a pure function of the app program and is read-only
+        # during eval, so callers share one across all devices of the same app (see
+        # Application.tree_builder) instead of rebuilding it per device.
+        builder = tree_builder if tree_builder is not None else DynamicTreeBuilder(app)
         self._app = app
         self._tree = builder.tree
         self._idx = builder.idx

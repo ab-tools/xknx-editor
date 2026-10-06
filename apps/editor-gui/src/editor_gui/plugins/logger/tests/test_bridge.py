@@ -3,7 +3,11 @@ download, myknx, export, import) in the in-app Logger panel."""
 
 from __future__ import annotations
 
+import io
 import logging
+import sys
+import tempfile
+from pathlib import Path
 
 from editor_gui.plugins.logger.service import LogService
 
@@ -39,3 +43,16 @@ def test_bridge_is_idempotent_across_instances():
 
     bridges = [h for h in pkg.handlers if isinstance(h, _StdlibBridgeHandler)]
     assert len(bridges) == 1
+
+
+def test_structlog_is_written_to_console_and_disk(monkeypatch, tmp_path: Path) -> None:
+    console = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", console)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+    svc = LogService()
+    assert (tmp_path / "xknx-editor.log").exists()
+    svc.info("tee test", "app", value=42)
+
+    assert "tee test" in console.getvalue()
+    assert "tee test" in (tmp_path / "xknx-editor.log").read_text()
