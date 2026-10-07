@@ -1,0 +1,17 @@
+<!-- System B sample application load fragments. see .references/ets_map.md -->
+<LoadProcedures>
+  <LoadProcedure MergeId="2">
+    <LdCtrlRelSegment LsmIdx="4" Size="16" Mode="1" Fill="0" AppliesTo="full" />
+    <LdCtrlRelSegment LsmIdx="4" Size="16" Mode="0" Fill="0" AppliesTo="par" />
+    <LdCtrlWriteProp ObjIdx="4" PropId="27" Verify="false" InlineData="00000010003200000000" />
+  </LoadProcedure>
+  <LoadProcedure MergeId="4">
+    <LdCtrlWriteRelMem ObjIdx="4" Offset="0" Size="16" Verify="true" AppliesTo="full,par" />
+  </LoadProcedure>
+  <LoadProcedure MergeId="7">
+    <LdCtrlLoadImageProp ObjIdx="1" PropId="27" />
+    <LdCtrlLoadImageProp ObjIdx="2" PropId="27" />
+    <LdCtrlLoadImageProp ObjIdx="3" PropId="27" />
+    <LdCtrlLoadImageProp ObjIdx="4" PropId="27" />
+  </LoadProcedure>
+</LoadProcedures>

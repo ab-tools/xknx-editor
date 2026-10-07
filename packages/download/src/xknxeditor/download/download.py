@@ -16,12 +16,13 @@ from typing import TYPE_CHECKING
 from xknx.exceptions import ManagementConnectionError
 from xknx.telegram import IndividualAddress
 
-from .group_communication import synthesize_group_communication_controls
+from .errors import PartialDownloadError
+from .group_communication import materialize_group_communication_controls
 from .image import build_image
 from .merge import mask_authorize_levels, resolve_download_controls
 from .procedure import LoadProcedureRunner
 from .programmer import MAX_NEGOTIATED_APDU_LENGTH
-from .scope import DownloadScope
+from .scope import DownloadScope, mask_object_types
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +92,7 @@ def _resolve_controls(
     image: DownloadImage,
     scope: DownloadScope,
 ) -> list[object]:
-    """Return the ordered Load Controls to run for ``scope``.
-
-    ``UNLOAD`` selects the mask's Unload procedure (removing the application /
-    resetting the Load State Machines); every other scope runs the Load
-    procedure plus the synthesized group communication table writes (the load
-    procedure itself is filtered by scope while executing). ``UNLOAD_ALL``
-    resolves the same Unload procedure (the address reset is a separate step).
-    """
+    """Select and materialize the scoped procedure before any device mutation."""
     master_raw = master.raw if master is not None else None
     if scope in (DownloadScope.UNLOAD, DownloadScope.UNLOAD_ALL):
         from xknxeditor.namespaces.intermediate.procedure_type_t import ProcedureType
@@ -106,10 +100,20 @@ def _resolve_controls(
         return resolve_download_controls(
             application, master_raw, procedure_type=ProcedureType.UNLOAD
         )
-    return [
-        *resolve_download_controls(application, master_raw),
-        *synthesize_group_communication_controls(image),
-    ]
+    base = resolve_download_controls(application, master_raw, scope=scope)
+    return materialize_group_communication_controls(
+        image, base, _object_types(application, master), scope
+    )
+
+
+def _object_types(
+    application: Application, master: MasterData | None
+) -> dict[int, int]:
+    return (
+        mask_object_types(master.raw, application.program.mask_version)
+        if master is not None
+        else {}
+    )
 
 
 def _apdu_overhead(security: DeviceSecurity | None) -> int:
@@ -253,6 +257,7 @@ async def download(
         connection_manager=manager,
         max_apdu_length=apdu_ceiling,
         controls=controls,
+        object_types=_object_types(application, master),
         scope=scope,
         expected_descriptor=expected_descriptor,
         negotiate_apdu=negotiate_apdu,
@@ -261,6 +266,22 @@ async def download(
     )
     try:
         await runner.run(progress)
+    except Exception as exc:
+        # A failure after the procedure began writing the device may leave it in a
+        # partially loaded, inconsistent state. Flag that for load scopes so the
+        # caller can warn the user; an unload is meant to clear the device, so its
+        # failures pass through unwrapped. The original failure is kept both as the
+        # cause and inside the message so it is never lost from any log sink.
+        if runner.state_mutated and scope not in (
+            DownloadScope.UNLOAD,
+            DownloadScope.UNLOAD_ALL,
+        ):
+            raise PartialDownloadError(
+                f"Downloading {address} failed after it had started writing the "
+                f"device, so it may be left in an inconsistent, partially loaded "
+                f"state - re-download it to restore a working state. Cause: {exc}"
+            ) from exc
+        raise
     finally:
         # Ensure the connection is closed even if the procedure omits a trailing
         # Disconnect or fails partway through.
@@ -318,6 +339,7 @@ async def preflight(
         connection_manager=manager,
         max_apdu_length=apdu_ceiling,
         controls=controls,
+        object_types=_object_types(application, master),
         scope=scope,
         expected_descriptor=expected_descriptor,
         negotiate_apdu=negotiate_apdu,

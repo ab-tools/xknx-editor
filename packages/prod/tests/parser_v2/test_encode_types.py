@@ -62,12 +62,14 @@ from xknxeditor.namespaces.intermediate.parameter_type_t_type_time_unit import (
 from xknxeditor.prod.parser_v2.encode import _encode_value
 
 
-def _number() -> ParameterTypeTypeNumber:
+def _number(bits: int = 8, *, signed: bool = False) -> ParameterTypeTypeNumber:
     return ParameterTypeTypeNumber(
-        size_in_bit=8,
-        type_value=ParameterTypeTypeNumberType.UNSIGNED_INT,
-        min_inclusive=0,
-        max_inclusive=255,
+        size_in_bit=bits,
+        type_value=ParameterTypeTypeNumberType.SIGNED_INT
+        if signed
+        else ParameterTypeTypeNumberType.UNSIGNED_INT,
+        min_inclusive=-(1 << (bits - 1)) if signed else 0,
+        max_inclusive=(1 << (bits - int(signed))) - 1,
     )
 
 
@@ -108,8 +110,8 @@ def test_number_unsigned() -> None:
 
 
 def test_number_negative_twos_complement() -> None:
-    assert _encode_value("-1", 8, _number()) == 0xFF
-    assert _encode_value("-2", 16, _number()) == 0xFFFE
+    assert _encode_value("-1", 8, _number(signed=True)) == 0xFF
+    assert _encode_value("-2", 16, _number(16, signed=True)) == 0xFFFE
 
 
 def test_number_invalid_returns_none() -> None:
@@ -305,8 +307,8 @@ def test_decode_raw_data_property_round_trip() -> None:
 
 def test_number_little_endian_byte_swap() -> None:
     # 500 = 0x01F4 big-endian; little-endian reverses the two octets
-    assert _encode_value("500", 16, _number()) == 0x01F4
-    assert _encode_value("500", 16, _number(), little_endian=True) == 0xF401
+    assert _encode_value("500", 16, _number(16)) == 0x01F4
+    assert _encode_value("500", 16, _number(16), little_endian=True) == 0xF401
 
 
 def test_date_without_year_zeroes_year_octet() -> None:

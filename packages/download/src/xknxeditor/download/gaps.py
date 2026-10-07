@@ -17,15 +17,7 @@ from __future__ import annotations
 # Control name -> the KNX Standard v3.0.0 service / clause it maps to. These are
 # defined by the standard and emitted by load procedures but not yet executed
 # by this engine; hitting one is a known implementation gap, not a data error.
-KNOWN_GAPS: dict[str, str] = {
-    "LdCtrlOnError": (
-        "load procedure error-branch directive "
-        "(KNX Standard v3.0.0, 2/3/1 Load Controls)"
-    ),
-    "LdCtrlProcType": (
-        "load procedure type marker (KNX Standard v3.0.0, 2/3/1 Load Controls)"
-    ),
-}
+KNOWN_GAPS: dict[str, str] = {}
 
 # Controls that legitimately have nothing to write, so a read-only preflight can
 # skip them without hiding a gap: state events, segment allocations, delays,

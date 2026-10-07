@@ -1,7 +1,7 @@
 """Tests for the System B group communication table formatter.
 
 The golden vectors marked "device" are the exact bytes read from a real System B
-device (M-015B A-0200, individual address 1.1.41) over the bus.
+device (System B sample, individual address 1.1.5) over the bus.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def test_address_table_has_two_octet_count_and_no_device_address() -> None:
 
 
 def test_address_table_matches_real_device() -> None:
-    # 1.1.41: 43 consecutive addresses 0x0b08..0x0b32 plus 0x1c07.
+    # Sample: 43 consecutive addresses 0x0b08..0x0b32 plus 0x1c07.
     addresses = [*range(0x0B08, 0x0B33), 0x1C07]
     expected = "002c" + "".join(f"{a:04x}" for a in sorted(addresses))
     assert build_group_address_table_b(addresses).hex() == expected
@@ -84,7 +84,7 @@ def test_group_object_table_linked_records_and_gaps() -> None:
 
 
 def test_group_object_table_matches_real_device_prefix() -> None:
-    # 1.1.41 device prefix: obj 1 = 0x4f07, obj 2 = 0xf707, obj 3..9 gaps.
+    # Sample device prefix: obj 1 = 0x4f07, obj 2 = 0xf707, obj 3..9 gaps.
     descriptors = {1: (0x4F, 0x07), 2: (0xF7, 0x07)}
     data = build_group_object_table_b(descriptors, highest_number=200)
     assert data[:2] == bytes.fromhex("00c8")  # count = 200

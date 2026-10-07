@@ -448,16 +448,30 @@ class ConnectionService:
             return
         exc = future.exception()
         if exc is not None:
-            self._log.error("Programming failed", error=str(exc))
-            if isinstance(exc, ManagementConnectionError):
-                # A full download of a virgin device first writes its address to the single
-                # device in programming mode; nothing answering here usually means the device
-                # is not in (or more than one device is in) programming mode.
+            from xknxeditor.download.errors import PartialDownloadError
+
+            if isinstance(exc, PartialDownloadError):
+                # Report the actual failure (the chained cause), then make the
+                # recovery step explicit. The wrapper alone would hide the root
+                # cause, which is what the user needs to see.
+                cause = exc.__cause__ or exc
+                self._log.error("Programming failed", error=str(cause))
                 self._log.error(
-                    "No device responded at the address — for a new device put exactly "
-                    "one device into programming mode; otherwise check it is powered and "
-                    "reachable from this interface (line/coupler)"
+                    "The device may now be in an inconsistent, partially loaded "
+                    "state. Re-run programming (full download) once the cause above "
+                    "is resolved to restore a working state."
                 )
+            else:
+                self._log.error("Programming failed", error=str(exc))
+                if isinstance(exc, ManagementConnectionError):
+                    # A full download of a virgin device first writes its address to the single
+                    # device in programming mode; nothing answering here usually means the device
+                    # is not in (or more than one device is in) programming mode.
+                    self._log.error(
+                        "No device responded at the address — for a new device put exactly "
+                        "one device into programming mode; otherwise check it is powered and "
+                        "reachable from this interface (line/coupler)"
+                    )
             self._set_program_notice(False)
         else:
             self._log.info("Programming complete")

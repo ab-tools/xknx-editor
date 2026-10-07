@@ -10,6 +10,7 @@ from xknx.telegram.apci import (
     FunctionPropertyCommand,
     FunctionPropertyStateRead,
     MemoryRead,
+    PropertyValueRead,
     PropertyValueWrite,
 )
 
@@ -20,7 +21,12 @@ from xknxeditor.download.image import (
     PropertyValue,
     RelativeSegment,
 )
-from xknxeditor.download.load_state import PID_LOAD_STATE_CONTROL, LoadState
+from xknxeditor.download.load_state import (
+    PID_LOAD_STATE_CONTROL,
+    LoadEvent,
+    LoadState,
+    start_loading,
+)
 from xknxeditor.download.procedure import LoadProcedureRunner
 from xknxeditor.download.programmer import DeviceProgrammer
 from xknxeditor.download.scope import DownloadScope
@@ -48,6 +54,7 @@ from xknxeditor.namespaces.intermediate.ld_ctrl_master_reset_t import LdCtrlMast
 from xknxeditor.namespaces.intermediate.ld_ctrl_read_function_prop_t import (
     LdCtrlReadFunctionProp,
 )
+from xknxeditor.namespaces.intermediate.ld_ctrl_rel_segment_t import LdCtrlRelSegment
 from xknxeditor.namespaces.intermediate.ld_ctrl_restart_t import LdCtrlRestart
 from xknxeditor.namespaces.intermediate.ld_ctrl_unload_t import LdCtrlUnload
 from xknxeditor.namespaces.intermediate.ld_ctrl_write_mem_t import LdCtrlWriteMem
@@ -122,6 +129,50 @@ async def test_full_property_based_sequence() -> None:
     assert runner.restarted
 
 
+async def test_load_stays_loaded_after_start_loading() -> None:
+    # Present DIMinBOX object 1 accepts START_LOADING but keeps reporting LOADED;
+    # this is separate from the optional, absent object 5 MapError tolerance.
+    class StaysLoadedDevice(FakeDevice):
+        def _handle_property_write(self, payload: PropertyValueWrite) -> None:
+            if (
+                payload.object_index == 1
+                and payload.property_id == PID_LOAD_STATE_CONTROL
+                and payload.data == start_loading()
+            ):
+                return
+            super()._handle_property_write(payload)
+
+    device = StaysLoadedDevice(object_types={0: 0, 1: _ADDRESS_TABLE_TYPE})
+    device.load_states[1] = LoadState.LOADED
+    application = _application(
+        LdCtrlLoad(lsm_idx=1),
+        LdCtrlWriteMem(address=0x4000, size=2, inline_data=b"\x11\x22", verify=True),
+        LdCtrlLoadCompleted(lsm_idx=1),
+    )
+    programmer = DeviceProgrammer(device)
+    runner = LoadProcedureRunner(application, _empty_image(), programmer)
+
+    await runner.run()
+
+    assert await programmer.read_load_state(1) == LoadState.LOADED
+    assert bytes(device.memory[0x4000 + i] for i in range(2)) == b"\x11\x22"
+    assert [
+        p.data[0]
+        for p in device.sent
+        if isinstance(p, PropertyValueWrite)
+        and p.object_index == 1
+        and p.property_id == PID_LOAD_STATE_CONTROL
+    ] == [LoadEvent.START_LOADING, LoadEvent.LOAD_COMPLETE]
+    # The only state read is our explicit check above: no 30-second poll loop.
+    assert (
+        sum(
+            isinstance(p, PropertyValueRead) and p.property_id == PID_LOAD_STATE_CONTROL
+            for p in device.sent
+        )
+        == 1
+    )
+
+
 async def test_load_image_mem_reads_without_writing() -> None:
     application = _application(LdCtrlLoadImageMem(address=0x4000, size=4))
     runner, device = _runner(application, DownloadImage(segments=(), properties=()))
@@ -133,7 +184,40 @@ async def test_load_image_mem_reads_without_writing() -> None:
     assert any(isinstance(p, MemoryRead) and p.address == 0x4000 for p in device.sent)
 
 
-async def test_master_reset_sends_restart_master_reset() -> None:
+async def test_state_mutated_stays_false_for_read_only_run() -> None:
+    application = _application(
+        LdCtrlConnect(),
+        LdCtrlLoadImageMem(address=0x4000, size=4),
+        LdCtrlDisconnect(),
+    )
+    runner, _ = _runner(application, DownloadImage(segments=(), properties=()))
+
+    await runner.run()
+
+    assert runner.state_mutated is False
+
+
+async def test_state_mutated_set_once_a_write_runs() -> None:
+    image = DownloadImage(
+        segments=(MemorySegment(address=0x4000, data=bytes(range(8))),),
+        properties=(),
+    )
+    application = _application(
+        LdCtrlConnect(),
+        LdCtrlUnload(obj_type=_ADDRESS_TABLE_TYPE, occurrence=0),
+        LdCtrlLoad(obj_type=_ADDRESS_TABLE_TYPE, occurrence=0),
+        LdCtrlWriteMem(
+            address=0x4000, size=8, verify=False, inline_data=bytes(range(8))
+        ),
+        LdCtrlLoadCompleted(obj_type=_ADDRESS_TABLE_TYPE, occurrence=0),
+        LdCtrlDisconnect(),
+    )
+    runner, _ = _runner(application, image)
+
+    await runner.run()
+
+    assert runner.state_mutated is True
+
     application = _application(
         LdCtrlConnect(),
         LdCtrlMasterReset(erase_code=4, channel_number=0),
@@ -249,7 +333,7 @@ async def test_write_mem_image_backed() -> None:
 async def test_write_rel_mem_uses_table_reference() -> None:
     application = _application(
         LdCtrlWriteRelMem(
-            obj_type=_ADDRESS_TABLE_TYPE,
+            obj_type=3,
             occurrence=0,
             offset=4,
             size=2,
@@ -257,7 +341,7 @@ async def test_write_rel_mem_uses_table_reference() -> None:
             inline_data=b"\x11\x22",
         )
     )
-    device = FakeDevice(object_types={0: 0x0000, 1: _ADDRESS_TABLE_TYPE})
+    device = FakeDevice(object_types={0: 0x0000, 1: 3})
     device.table_references[1] = 0x4000
     runner = LoadProcedureRunner(
         application, DownloadImage(segments=(), properties=()), DeviceProgrammer(device)
@@ -285,7 +369,7 @@ async def test_write_rel_mem_image_backed_uses_relative_lookup() -> None:
     )
     application = _application(
         LdCtrlWriteRelMem(
-            obj_type=_ADDRESS_TABLE_TYPE,
+            obj_type=3,
             occurrence=0,
             offset=0,
             size=4,
@@ -293,7 +377,7 @@ async def test_write_rel_mem_image_backed_uses_relative_lookup() -> None:
             inline_data=None,
         )
     )
-    device = FakeDevice(object_types={0: 0x0000, 1: _ADDRESS_TABLE_TYPE})
+    device = FakeDevice(object_types={0: 0x0000, 1: 3})
     device.table_references[1] = 0x3804
     runner = LoadProcedureRunner(application, image, DeviceProgrammer(device))
 
@@ -319,6 +403,8 @@ async def test_write_rel_mem_relative_segment_by_object_type() -> None:
         ),
     )
     application = _application(
+        LdCtrlLoad(obj_type=1),
+        LdCtrlRelSegment(obj_type=1, size=2, mode=0, fill=0),
         LdCtrlWriteRelMem(
             obj_type=_ADDRESS_TABLE_TYPE,
             occurrence=0,
@@ -326,7 +412,8 @@ async def test_write_rel_mem_relative_segment_by_object_type() -> None:
             size=4,
             verify=False,
             inline_data=None,
-        )
+        ),
+        LdCtrlLoadCompleted(obj_type=1),
     )
     device = FakeDevice(object_types={0: 0x0000, 1: _ADDRESS_TABLE_TYPE})
     device.table_references[1] = 0x3400
@@ -376,8 +463,8 @@ async def test_bcu1_lcfilter_and_lcslave_writes_are_absolute() -> None:
         LdCtrlMemAddrSpace,
     )
 
-    # BCU1 coupler: LcFilter and LcSlave are both flat absolute A_Memory_Writes (the reference stack routes both
-    # through one shared memory path). MV-0900 writes LcSlave config (e.g. @270) then the LcFilter
+    # BCU1 coupler: LcFilter and LcSlave use flat absolute A_Memory_Writes.
+    # MV-0900 writes LcSlave config (e.g. @270) then the LcFilter
     # table (@512); both must land at their absolute address.
     table = bytes([0b1010_1010, 0x00, 0xFF])
     app = _application(
@@ -785,7 +872,7 @@ _APPLICATION_TYPE = 3
 
 def _scoped_application() -> Application:
     # group communication parts (address=1, association=2) and the application
-    # part (3); a partial download runs only the matching parts.
+    # part (3); automatic load controls follow their per-type rules.
     return _application(
         LdCtrlLoad(obj_type=1, occurrence=0),
         LdCtrlLoad(obj_type=_ASSOCIATION_TABLE_TYPE, occurrence=0),
@@ -797,7 +884,7 @@ def _scoped_device() -> FakeDevice:
     return FakeDevice(object_types={0: 0x0000, 1: 1, 2: 2, 3: 3})
 
 
-async def test_partial_parameters_scope_runs_only_application_part() -> None:
+async def test_auto_load_controls_in_parameter_scope() -> None:
     device = _scoped_device()
     runner = LoadProcedureRunner(
         _scoped_application(),
@@ -806,10 +893,10 @@ async def test_partial_parameters_scope_runs_only_application_part() -> None:
         scope=DownloadScope.PARAMETERS,
     )
     await runner.run()
-    assert set(device.load_states) == {3}  # only the application part loaded
+    assert set(device.load_states) == {3}
 
 
-async def test_partial_group_scope_runs_only_table_parts() -> None:
+async def test_auto_load_controls_in_group_scope() -> None:
     device = _scoped_device()
     runner = LoadProcedureRunner(
         _scoped_application(),
@@ -818,7 +905,7 @@ async def test_partial_group_scope_runs_only_table_parts() -> None:
         scope=DownloadScope.GROUP_COMMUNICATION,
     )
     await runner.run()
-    assert set(device.load_states) == {1, 2}  # address + association tables
+    assert set(device.load_states) == {1, 2, 3}
 
 
 async def test_full_scope_runs_all_parts() -> None:
@@ -1018,9 +1105,8 @@ async def test_compare_prop_truncation_respects_the_mask() -> None:
 
 
 # Error the Zennio DIMinBOX ap1 procedure maps to success around an optional
-# unload of interface object 5 (absent on a PeiType 0 variant): ETS
-# HAWK_E_RESOURCE_WRITE_PROTECTED, reported for a write to a protected or
-# non-existing resource.
+# unload of interface object 5 (absent on a PeiType 0 variant): rejected write
+# to a protected or non-existing resource.
 _RESOURCE_WRITE_PROTECTED_ERROR = 3221498632
 
 

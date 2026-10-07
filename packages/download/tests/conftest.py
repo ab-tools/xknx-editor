@@ -15,6 +15,8 @@ from xknx.telegram.apci import (
     MemoryRead,
     MemoryResponse,
     MemoryWrite,
+    PropertyDescriptionRead,
+    PropertyDescriptionResponse,
     PropertyValueRead,
     PropertyValueResponse,
     PropertyValueWrite,
@@ -50,6 +52,10 @@ class FakeDevice:
         """Initialize an empty device with an optional object type map."""
         self.memory: dict[int, int] = {}
         self.properties: dict[tuple[int, int], bytes] = {}
+        self.property_element_sizes: dict[tuple[int, int], int] = {
+            (5, 0x33): 2,
+            (4, 50): 1,
+        }
         self.load_states: dict[int, LoadState] = {}
         self.table_references: dict[int, int] = {}
         self.object_types = object_types or {}
@@ -89,6 +95,27 @@ class FakeDevice:
     async def request(self, payload: APCI, expected: type[APCI] | None) -> Telegram:
         """Handle a payload the programmer waits for a response to."""
         self.sent.append(payload)
+        if isinstance(payload, PropertyDescriptionRead):
+            width = self.property_element_sizes.get(
+                (payload.object_index, payload.property_id), 1
+            )
+            return self._telegram(
+                PropertyDescriptionResponse(
+                    object_index=payload.object_index,
+                    property_id=payload.property_id,
+                    type_=16 + width,
+                    max_count=100,
+                )
+            )
+        if isinstance(payload, MemoryWrite | UserMemoryWrite):
+            for index, byte in enumerate(payload.data):
+                self.memory[payload.address + index] = byte
+            response = (
+                UserMemoryResponse
+                if isinstance(payload, UserMemoryWrite)
+                else MemoryResponse
+            )
+            return self._telegram(response(address=payload.address, data=payload.data))
         if isinstance(payload, MemoryRead):
             if (
                 self.memory_read_zero_above is not None
@@ -171,7 +198,15 @@ class FakeDevice:
             }
             self.load_states[payload.object_index] = transitions[LoadEvent(event)]
             return
-        self.properties[(payload.object_index, payload.property_id)] = payload.data
+        key = (payload.object_index, payload.property_id)
+        width = len(payload.data) // payload.count
+        data = bytearray(self.properties.get(key, b""))
+        start = (payload.start_index - 1) * width
+        end = start + len(payload.data)
+        data.extend(bytes(max(0, end - len(data))))
+        data[start:end] = payload.data
+        self.properties[key] = bytes(data)
+        self.property_element_sizes[key] = width
 
     def _handle_property_read(
         self, payload: PropertyValueRead
@@ -186,13 +221,25 @@ class FakeDevice:
             # last interface object; locate_object stops scanning on that.
             data = object_type.to_bytes(2, "big") if object_type is not None else b""
         elif payload.property_id == PID_TABLE_REFERENCE:
-            data = self.table_references.get(payload.object_index, 0).to_bytes(2, "big")
+            data = self.table_references.get(payload.object_index, 0).to_bytes(
+                4 if self.descriptor == 0x07B0 else 2, "big"
+            )
+        elif payload.object_index == 0 and payload.property_id == 14:
+            data = self.properties.get((0, 14), b"\x00")
         else:
             data = self.properties.get((payload.object_index, payload.property_id), b"")
+            width = self.property_element_sizes.get(
+                (payload.object_index, payload.property_id)
+            )
+            if width is not None and payload.start_index > 0:
+                start = (payload.start_index - 1) * width
+                data = data[start : start + payload.count * width]
         return PropertyValueResponse(
             object_index=payload.object_index,
             property_id=payload.property_id,
             data=data,
+            count=payload.count,
+            start_index=payload.start_index,
         )
 
     def _function_property_response(

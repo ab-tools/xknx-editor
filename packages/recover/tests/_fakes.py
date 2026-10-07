@@ -54,9 +54,14 @@ class FakeConnection:
             data = object_type.to_bytes(2, "big") if object_type is not None else b""
         else:
             data = self.properties.get((payload.object_index, payload.property_id), b"")
+        # Echo the request's element addressing like a real device: start_index and a
+        # count of 1 for a present value, 0 for an absent one (the device signalling
+        # "no such element"), which the programmer's response validation checks.
         return PropertyValueResponse(
             object_index=payload.object_index,
             property_id=payload.property_id,
+            count=payload.count if data else 0,
+            start_index=payload.start_index,
             data=data,
         )
 

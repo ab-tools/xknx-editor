@@ -202,6 +202,10 @@ def _encode_value(
     ``for_property`` selects the RawData framing: a memory value carries a 4-octet
     length prefix, a property value carries none (see ``_encode_raw_data``).
     """
+    try:
+        str_value = validate_parameter_value(str_value, tc)
+    except ValueError:
+        return None
     if isinstance(tc, (ParameterTypeTypeNumber, ParameterTypeTypeTime)):
         # A time value is stored as a plain integer in the type's unit.
         return _apply_byte_order(
@@ -280,6 +284,28 @@ def _encode_number(str_value: str, size_in_bit: int) -> int | None:
     except (ValueError, TypeError):
         return None
     return v & ((1 << size_in_bit) - 1)
+
+
+def validate_parameter_value(value: str, tc: object) -> str:
+    """Validate integer domains and resolve restriction labels to numeric values."""
+    if isinstance(tc, ParameterTypeTypeNumber):
+        number = int(value, 16) if value[:2].lower() == "0x" else int(value)
+        if not tc.min_inclusive <= number <= tc.max_inclusive:
+            raise ValueError(
+                f"value {value!r} outside {tc.min_inclusive}..{tc.max_inclusive}"
+            )
+    elif isinstance(tc, ParameterTypeTypeRestriction):
+        try:
+            numeric = int(value)
+        except ValueError:
+            numeric = -1
+        if 0 <= numeric <= 0xFFFFFFFF:
+            return value
+        for entry in tc.enumeration:
+            if entry.text == value:
+                return str(entry.value)
+        raise ValueError(f"invalid restriction value {value!r}")
+    return value
 
 
 def _to_single(x: float) -> float:

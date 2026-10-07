@@ -1,19 +1,20 @@
 # xknxeditor-download
 
-**Program real KNX devices end-to-end, without ETS.**
+**Program real KNX devices end-to-end.**
 
-This package does the job ETS does when you press "Download": it takes a parsed
-product database and an application's Load Procedure and actually commissions a
-physical device over a live KNX bus - assembling the memory image, driving each
-loadable part's Load State Machine, writing memory and properties, laying down the
-group communication tables, and restarting the device. It is a vendor-independent
-implementation derived from the KNX Standard v3.0.0.
+This package takes a parsed product database and an application's Load Procedure
+and commissions a physical device over a live KNX bus - assembling the memory
+image, driving each loadable part's Load State Machine, writing memory and
+properties, laying down the group communication tables, and restarting the
+device. It is a vendor-independent implementation derived from the KNX Standard
+v3.0.0.
 
-This is verified on real hardware, not just in theory: a full download run through
-the GUI has programmed physical devices, and the System B group communication path
-(tables plus Memory Control Block CRCs) has been confirmed byte-perfect against
-genuinely programmed devices. It also programs a virgin device's individual address
-and offers a read-only preflight to preview every change before writing.
+A full download run through the GUI has programmed physical devices, and the
+System B group communication path has been checked against genuinely programmed
+devices. Recent changes are additionally covered by an offline replay of a
+reference programming session; treat anything not confirmed on a live device as
+unverified. The package also programs a virgin device's individual address and
+offers a read-only preflight to preview every change before writing.
 
 Under the hood it interprets the Load Procedure and executes it over a running
 [`xknx`](https://github.com/XKNX/xknx) connection. It builds on the sibling
@@ -32,7 +33,7 @@ connection).
   (MV-0700/0701/0705/5705) whose master data still lists a `StandardMemory`
   Application Load Control: their product Load Procedures drive the state machine
   through `PID_LOAD_STATE_CONTROL`, and the memory location is legacy and unused.
-- Chunked memory writes with optional read-back verification, property writes,
+- Chunked memory and property writes, with optional read-back verification and
   interface object location by type.
 - Optional device mask guard (`expected_descriptor`): the device descriptor is
   read and checked before any write, refusing to program the wrong device.
@@ -46,8 +47,7 @@ connection).
   3/3/7 section 3.4.7).
 
 Not covered yet: clearing a line coupler filter table (`LdCtrlClearLCFilterTable`,
-coupler-only and not yet validated against a router), the load procedure control
-flow directives `LdCtrlOnError` / `LdCtrlProcType`, and USB transport. Unsupported
+coupler-only and not yet validated against a router), and USB transport. Unsupported
 Load Controls are reported via `UnsupportedProcedureError` rather than guessed (see
 [Implementation gaps](#implementation-gaps-and-diagnostics)).
 
@@ -76,7 +76,7 @@ not part of this package yet.
 
 ## Group communication tables
 
-A full or group-communication download also writes the three tables that link a
+A full, application, or group-communication download writes the three tables that link a
 device's group objects to group addresses. Pass a `GroupCommunication`
 (the device's own address plus its `GroupObjectLink`s) to `download`/`build_image`.
 Two device models are handled, detected automatically from the application:
@@ -88,10 +88,8 @@ Two device models are handled, detected automatically from the application:
 - **System B** (mask MV-07B0): the tables live in relative memory addressed
   through each object's table reference. The formats differ (2-octet counts, no
   leading device address, a group object table covering every object number), and
-  the application program carries no controls for them, so the write controls are
-  synthesized (see `group_communication.py`). Table bytes are validated against
-  real hardware; the relative-segment allocation framing is modelled on the
-  application's own parameter segment.
+  the master procedure supplies their load transactions (see
+  `group_communication.py`).
 
 The com object (group object) table carries only the objects the device actually
 **instantiated** — its group object tree — not every object the parameter-driven UI
@@ -101,7 +99,7 @@ rest at their manufacturer seed (toggling only the communication bit). This matc
 genuine implementations, which follow the group object's `Active` flag. It matters for products
 with channel modes: e.g. a 4-channel dimmer configured as "2x Tunable White" does not
 carry the individual per-channel objects that the raw parameter defaults would
-otherwise activate (verified byte-perfect against real hardware). A device configured
+otherwise activate. A device configured
 from scratch (no saved instances) falls back to the parameter-visible set.
 
 ## Preview before writing
@@ -110,9 +108,8 @@ from scratch (no saved instances) falls back to the parameter-visible set.
 current bytes at every location a write would target and returns the diff without
 changing anything (and runs the application-fingerprint compare as a gate). Run it
 before any real download to confirm the change set. The System B group
-communication path has been verified byte-perfect against real hardware (including
-the Memory Control Block CRCs), but preflight still lets you review any device
-before writing.
+communication path is implemented end-to-end, but preflight still lets you
+review any device before writing.
 
 The GUI builds a **Test Before Programming** action directly on top of `preflight`:
 it reports per memory segment and property whether the image this library would
@@ -127,9 +124,15 @@ A Load Control the interpreter does not execute never fails silently. The runner
 raises `UnsupportedProcedureError` with a message that names the KNX Standard
 service the control maps to, its position in the procedure and the target, so a
 bug report shows immediately what is missing. The read-only `preflight` logs the
-same information instead of raising. The registry of known-but-unimplemented
+same information; unsupported semantics also fail its validation. The registry of known-but-unimplemented
 controls (with their standard mapping) lives in `gaps.py`; controls that legitimately
 have nothing to write are listed there too so the preview does not flag them.
+
+Controls are filtered by `AppliesTo` before execution, and `OnError` handlers are
+honoured: a matching handler continues only when it declares `Ignore=true`,
+otherwise the failure propagates (with the application's `MessageRef` text when
+available). Malformed responses and transport failures remain fatal. These rules
+also apply to read-only preflight.
 
 The runner and preflight also log their start (target, in-scope control count) and
 every unsupported control through the `xknxeditor.download.procedure` logger.
@@ -162,8 +165,9 @@ Pass `master` (`registry.master`) so the Load Procedure can be resolved: for
 `DefaultProcedure`/`MergedProcedure` applications the mask version's default
 procedure is merged with the application's fragments; `ProductProcedure`
 applications carry the full procedure and work without it. For a partial
-download pass `scope=DownloadScope.PARAMETERS` or
-`DownloadScope.GROUP_COMMUNICATION`.
+download pass `scope=DownloadScope.PARAMETERS`,
+`DownloadScope.GROUP_COMMUNICATION`, or
+`DownloadScope.PARAMETERS_AND_GROUP_COMMUNICATION` for both.
 
 The device must already carry the target individual address; program a virgin
 device's individual address first via `program_individual_address`.

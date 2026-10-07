@@ -263,6 +263,7 @@ async def test_preflight_ignores_inline_property_source() -> None:
         )
     )
     runner, _device = _runner(application, DownloadImage(segments=(), properties=()))
+    _device.property_element_sizes[(5, 0x33)] = 1
 
     report = await runner.preflight()
 

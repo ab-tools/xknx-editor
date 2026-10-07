@@ -139,9 +139,10 @@ jobs:
 
   # Windows "compat" build: the pip imgui-bundle wheel is OpenGL-only, and a GPU-less VM (UTM/QEMU on a
   # Mac, Windows-on-ARM x64 emulation) has no usable OpenGL driver, so the app cannot create a window.
-  # This variant ships Mesa's software OpenGL (opengl32.dll) next to the exe and forces the softpipe
-  # gallium driver — pure C, NO LLVM JIT, so it survives x64 emulation (llvmpipe's JIT crashes there).
-  # No source rebuild: the normal OpenGL-only wheel is reused; only the GL driver DLL is swapped.
+  # This variant ships Mesa's software OpenGL (opengl32.dll) next to the exe and selects the llvmpipe
+  # gallium driver (LLVM JIT -> native code, multithreaded, far faster than softpipe). softpipe (pure
+  # C, no JIT) stays reachable via GALLIUM_DRIVER=softpipe as a manual fallback. No source rebuild:
+  # the normal OpenGL-only wheel is reused; only the GL driver DLL is swapped.
   build-windows-softwaregl:
     name: Build (windows software OpenGL)
     runs-on: windows-latest
@@ -185,7 +186,7 @@ jobs:
       # Fetch prebuilt Mesa for Windows (pal1000/mesa-dist-win) and drop its x64 opengl32.dll + sibling
       # DLLs NEXT TO THE EXE. Windows' safe DLL search resolves opengl32 from the app dir before
       # system32, so GLFW loads Mesa instead of the (missing/1.1) system driver. desktop_entry sets
-      # GALLIUM_DRIVER=softpipe at startup (see tools/desktop_entry.py).
+      # GALLIUM_DRIVER=llvmpipe at startup (see tools/desktop_entry.py).
       - name: Bundle Mesa software OpenGL (softpipe)
         shell: pwsh
         working-directory: apps/editor-gui

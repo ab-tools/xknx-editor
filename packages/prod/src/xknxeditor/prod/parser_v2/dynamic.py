@@ -32,6 +32,7 @@ from xknxeditor.namespaces.intermediate.module_def_static_t_parameters_union_pro
 )
 from xknxeditor.namespaces.intermediate.property_union_t import PropertyUnion
 
+from ..errors import EncodingError
 from .application_indexer import ApplicationIndexer
 from .calculation import evaluate_lr, evaluate_rl
 from .context import EvalCapture, EvalContext
@@ -51,6 +52,7 @@ from .encode import (
     encode_to_properties,
     resolve_param_values,
     type_size_in_bit,
+    validate_parameter_value,
     written_bit_mask,
 )
 from .nodes import (
@@ -629,6 +631,7 @@ class DynamicUI:
     def encode_to_memory(self) -> dict[str, bytes]:
         """Pack the current parameter state into per-segment byte buffers."""
         self.ui()  # refresh state
+        self.validate_parameter_values()
         return encode_to_memory(
             self._app,
             self._idx,
@@ -639,6 +642,7 @@ class DynamicUI:
     def encode_to_memory_masked(self) -> dict[str, tuple[bytes, bytes]]:
         """Encode into ``{segment_id: (data, mask)}``; mask marks written bytes."""
         self.ui()  # refresh state
+        self.validate_parameter_values()
         return encode_to_memory_masked(
             self._app,
             self._idx,
@@ -717,6 +721,7 @@ class DynamicUI:
     def encode_to_properties(self) -> dict[PropertyKey, bytes]:
         """Pack PropertyParameter-backed values into interface-object property data."""
         self.ui()
+        self.validate_parameter_values()
         return encode_to_properties(
             self._app,
             self._idx,
@@ -738,7 +743,28 @@ class DynamicUI:
         """Current value of a parameter ref in this UI state (None if unset)."""
         return self._state.get(ref_id)
 
+    def validate_parameter_values(self) -> None:
+        """Check resolved values, including selectors without storage."""
+        for ref_id, value in self._state.relative_param_values():
+            ref = self._idx.parameter_refs.get(ref_id)
+            if ref is None:
+                raise EncodingError(f"unknown parameter ref {ref_id!r}")
+            parameter = self._idx.parameters[ref.ref_id]
+            tc = self._idx.parameter_types[parameter.parameter_type].choice
+            try:
+                validate_parameter_value(value, tc)
+            except ValueError as exc:
+                raise EncodingError(f"parameter {ref_id}: {exc}") from exc
+
     def set_parameter_ref(self, ref_id: str, value: str) -> None:
+        found = self._state.find_scope_for_qualified(ref_id)
+        local_id = found[1] if found is not None else ref_id
+        ref = self._idx.parameter_refs.get(local_id)
+        if ref is None:
+            raise ValueError(f"unknown parameter ref {ref_id!r}")
+        parameter = self._idx.parameters[ref.ref_id]
+        parameter_type = self._idx.parameter_types[parameter.parameter_type]
+        value = validate_parameter_value(value, parameter_type.choice)
         active = self._state.active_param_refs()
         if active and ref_id not in active:
             raise ValueError(

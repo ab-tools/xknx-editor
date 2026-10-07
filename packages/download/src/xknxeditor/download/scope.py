@@ -1,129 +1,174 @@
-"""Download scope: full download versus a partial parameter/group download.
-
-A partial download runs only the Load Controls that target a given category of
-loadable part (KNX Standard v3.0.0, Chapter 3/5/3 "Configuration Procedures",
-section 3.5.3 "Load procedure for partial download"), classifying a control by
-the interface object it addresses:
-
-- the Address Table, Association Table and Group Object Table objects hold the
-  group communication;
-- the Application Program object holds the parameters;
-- the Device Object and connection/restart controls are framing and always run.
-
-The applies_to marker (``LdCtrlProcType``) is uniform on many products, so the
-object a control targets - not applies_to - is what distinguishes a partial
-parameter download from a partial group communication download.
-
-This is a deliberate deviation from the reference stack, which evaluates ``AppliesTo`` (and
-selects a subtype-specific procedure). Object-based scoping was validated
-byte-perfect on real hardware (e.g. a partial parameter download on 1.1.74),
-whereas an ``AppliesTo``-driven scope was observed to be wrong on that device, so
-the object a control addresses is the authoritative signal here.
-
-The classification looks at the object *type* for controls that carry one
-(``obj_type``, e.g. the synthesized group-communication table writes use types
-1/2/9) and at the interface object *index* otherwise (``obj_idx``/``lsm_idx``).
-For our control set these do not collide - group-communication controls always
-carry ``obj_type`` and parameter controls carry the Application Program index -
-but a hand-built procedure that group-addressed the System B group object at
-*index* 3 (rather than type 9) would need an index-to-type map to classify.
-"""
+"""Classify load controls by interface-object type without changing wire addressing."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
+from typing import TYPE_CHECKING
 
-# Interface object types (and their conventional indices) that hold group
-# communication: address table (1), association table (2), group object
-# table (9), group object responder table (also object type 9).
-_GROUP_COMMUNICATION_OBJECTS = frozenset({1, 2, 9})
-# The addressing tables (address table 1, association table 2) hold the group
-# address links. They are group communication but NOT part of the application
-# program - programming only the application program leaves them untouched.
-_ADDRESSING_OBJECTS = frozenset({1, 2})
-# The device object is framing (fingerprint compare) and always runs.
+from xknxeditor.namespaces.intermediate.ld_ctrl_base_t import LdCtrlBase
+from xknxeditor.namespaces.intermediate.ld_ctrl_load_completed_t import (
+    LdCtrlLoadCompleted,
+)
+from xknxeditor.namespaces.intermediate.ld_ctrl_load_t import LdCtrlLoad
+from xknxeditor.namespaces.intermediate.ld_ctrl_rel_segment_t import LdCtrlRelSegment
+from xknxeditor.namespaces.intermediate.ld_ctrl_unload_t import LdCtrlUnload
+from xknxeditor.namespaces.intermediate.ld_ctrl_write_prop_t import LdCtrlWriteProp
+
+from .errors import UnsupportedProcedureError
+
+if TYPE_CHECKING:
+    from xknxeditor.namespaces.intermediate.hawk_configuration_data_t import (
+        HawkConfigurationData,
+    )
+    from xknxeditor.namespaces.intermediate.master_data_t import MasterData
+
+GROUP_COMMUNICATION_OBJECTS = frozenset({1, 2, 9})
 _DEVICE_OBJECT = 0
-# The Router object (a line/backbone coupler's filter table) is group-address
-# routing: it belongs to GROUP_COMMUNICATION, and the untargeted
-# ``LdCtrlClearLCFilterTable`` clears it, so both must scope together (never clear
-# without the following write, nor write without the clear).
 _ROUTER_OBJECT = 6
 
 
 class DownloadScope(Enum):
-    """Which part of a Load Procedure to execute.
-
-    ``UNLOAD`` is not a partial load: it selects the Unload procedure instead of
-    the Load procedure (it removes the application program / resets the Load
-    State Machines to Unloaded). The download entry point routes it to the
-    ``Unload`` procedure and runs all of its controls; the individual address is
-    left untouched.
-
-    ``UNLOAD_ALL`` runs the same Unload procedure and then additionally resets
-    the individual address to the default, returning the device to the
-    unprogrammed state. It requires exactly one device in programming mode for
-    the address reset.
-    """
+    """The loadable parts to program; unload scopes select the Unload procedure."""
 
     FULL = "full"
     PARAMETERS = "par"
     GROUP_COMMUNICATION = "grp"
+    PARAMETERS_AND_GROUP_COMMUNICATION = "par,grp"
     APPLICATION = "ap1"
     UNLOAD = "unload"
     UNLOAD_ALL = "unload_all"
 
 
-def control_in_scope(control: object, scope: DownloadScope) -> bool:
-    """Return whether a control runs in ``scope``.
+def mask_configuration(
+    master_data: MasterData | None, mask_version_id: str
+) -> HawkConfigurationData | None:
+    """Use the current mask configuration for both procedures and object identity."""
+    if master_data is not None and master_data.mask_versions is not None:
+        for mask in master_data.mask_versions.mask_version:
+            if mask.id == mask_version_id:
+                for configuration in mask.hawk_configuration_data:
+                    if configuration.legacy_version is None:
+                        return configuration
+    return None
 
-    Controls that do not target a loadable part (Connect/Disconnect/Restart/
-    Delay and Device Object compares) are framing and always run. Targeted
-    controls run only when the object they address belongs to the requested
-    category; a full download runs everything.
 
-    - ``GROUP_COMMUNICATION`` runs the address, association and group object
-      tables (objects 1/2/9).
-    - ``PARAMETERS`` runs only the application program's parameter part (nothing
-      that belongs to group communication).
-    - ``APPLICATION`` runs the application program: the parameters, the
-      application object and the group object (com object descriptor) table, but
-      not the address/association tables (the group address links). It is the
-      "application program" (``ap1``) download.
+def mask_object_types(
+    master_data: MasterData | None, mask_version_id: str
+) -> dict[int, int]:
+    """Read the mask's explicit index-to-type mapping; never guess conventional indices."""
+    configuration = mask_configuration(master_data, mask_version_id)
+    result: dict[int, int] = {}
+    if configuration is not None and configuration.interface_objects is not None:
+        for item in configuration.interface_objects.interface_object:
+            if item.index is not None:
+                if item.index in result and result[item.index] != item.object_type:
+                    raise UnsupportedProcedureError(
+                        f"conflicting object types for index {item.index}"
+                    )
+                result[item.index] = item.object_type
+    return result
+
+
+def target_object_type(control: object, object_types: Mapping[int, int]) -> int | None:
+    """Resolve classification only; the original control still chooses the wire service.
+
+    An indexed target with missing metadata is unsafe to classify and fails closed.
+    The device object at index zero is the only fixed identity used without metadata.
     """
-    if scope is DownloadScope.FULL or scope in (
+    if type(control).__name__ == "LdCtrlClearLcfilterTable":
+        return _ROUTER_OBJECT
+    # Match the execution resolver's precedence (obj_idx, obj_type, lsm_idx).
+    index = getattr(control, "obj_idx", None)
+    if index is None:
+        obj_type = getattr(control, "obj_type", None)
+        if obj_type is not None:
+            return obj_type
+        index = getattr(control, "lsm_idx", None)
+    if index is None:
+        return None
+    if index == 0:
+        return _DEVICE_OBJECT
+    if index not in object_types:
+        raise UnsupportedProcedureError(
+            f"cannot resolve interface object index {index} to a type for "
+            f"{type(control).__name__}; mask InterfaceObjects metadata is required"
+        )
+    return object_types[index]
+
+
+def control_in_scope(
+    control: object,
+    scope: DownloadScope,
+    object_types: Mapping[int, int] | None = None,
+    *,
+    has_application_program2: bool = False,
+) -> bool:
+    """Apply each automatic control's partial-load rule; explicit flags take priority."""
+    if not control_applies(control, scope):
+        return False
+    if scope in (
+        DownloadScope.FULL,
+        DownloadScope.APPLICATION,
         DownloadScope.UNLOAD,
         DownloadScope.UNLOAD_ALL,
     ):
-        # UNLOAD / UNLOAD_ALL run the Unload procedure's controls in full (they
-        # are resolved separately by the download entry point, not filtered by
-        # object). UNLOAD_ALL additionally resets the individual address there.
         return True
-    target = _target_object(control)
-    if target is None or target == _DEVICE_OBJECT:
+    if isinstance(control, LdCtrlBase) and control.applies_to.value != "auto":
         return True
-    if scope is DownloadScope.GROUP_COMMUNICATION:
-        return target in _GROUP_COMMUNICATION_OBJECTS or target == _ROUTER_OBJECT
-    if scope is DownloadScope.APPLICATION:
-        # Everything except the group address link tables (address/association) and the
-        # coupler filter table (group routing, not the application program).
-        return target not in _ADDRESSING_OBJECTS and target != _ROUTER_OBJECT
-    # PARAMETERS: nothing that belongs to group communication (incl. the filter table).
-    return target not in _GROUP_COMMUNICATION_OBJECTS and target != _ROUTER_OBJECT
+    # see .references/ets_map.md
+    if not isinstance(
+        control,
+        (
+            LdCtrlUnload,
+            LdCtrlLoad,
+            LdCtrlLoadCompleted,
+            LdCtrlRelSegment,
+            LdCtrlWriteProp,
+        ),
+    ):
+        return True
+    target = target_object_type(control, object_types or {})
+    group = scope in (
+        DownloadScope.GROUP_COMMUNICATION,
+        DownloadScope.PARAMETERS_AND_GROUP_COMMUNICATION,
+    )
+    parameters = scope in (
+        DownloadScope.PARAMETERS,
+        DownloadScope.PARAMETERS_AND_GROUP_COMMUNICATION,
+    )
+    if isinstance(control, LdCtrlUnload):
+        if target in (1, 2):
+            return group
+        return target not in (3, 4, 9)
+    if isinstance(control, (LdCtrlLoad, LdCtrlLoadCompleted, LdCtrlRelSegment)):
+        if target in GROUP_COMMUNICATION_OBJECTS:
+            return group
+        if target == 4:
+            return has_application_program2 and (
+                parameters or isinstance(control, LdCtrlRelSegment)
+            )
+    if isinstance(control, LdCtrlWriteProp) and (
+        (target in (1, 2) and control.prop_id == 23)
+        or (target == 9 and control.prop_id in (51, 52))
+    ):
+        return group
+    return True
 
 
-def _target_object(control: object) -> int | None:
-    """The interface object type/index a control addresses, or None if framing.
-
-    ``LdCtrlClearLCFilterTable`` carries no object reference but operates on the coupler's
-    Router object (its filter table), so it is classified as that object for scoping - it must
-    never run in a scope where the following filter-table write does not, or vice versa."""
-    if type(control).__name__ == "LdCtrlClearLcfilterTable":
-        return _ROUTER_OBJECT
-    obj_type = getattr(control, "obj_type", None)
-    if obj_type is not None:
-        return obj_type
-    lsm_idx = getattr(control, "lsm_idx", None)
-    if lsm_idx is not None:
-        return lsm_idx
-    obj_idx = getattr(control, "obj_idx", None)
-    return obj_idx
+def control_applies(control: object, scope: DownloadScope) -> bool:
+    """Evaluate AppliesTo flags before merge/materialization."""
+    value = getattr(control, "applies_to", "all")
+    value = getattr(value, "value", value)
+    if value in ("all", "auto") or scope in (
+        DownloadScope.UNLOAD,
+        DownloadScope.UNLOAD_ALL,
+    ):
+        return True
+    full = scope in (DownloadScope.FULL, DownloadScope.APPLICATION)
+    flags = str(value).split(",")
+    if full:
+        return "full" in flags
+    if value == "par,grp":
+        return scope is DownloadScope.PARAMETERS_AND_GROUP_COMMUNICATION
+    return bool(set(scope.value.split(",")) & set(flags))

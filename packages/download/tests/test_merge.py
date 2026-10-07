@@ -11,6 +11,7 @@ from xknxeditor.download.merge import (
 )
 from xknxeditor.namespaces.intermediate.ld_ctrl_connect_t import LdCtrlConnect
 from xknxeditor.namespaces.intermediate.ld_ctrl_merge_t import LdCtrlMerge
+from xknxeditor.namespaces.intermediate.ld_ctrl_proc_type_t import LdCtrlProcType
 from xknxeditor.namespaces.intermediate.ld_ctrl_restart_t import LdCtrlRestart
 from xknxeditor.namespaces.intermediate.ld_ctrl_write_mem_t import LdCtrlWriteMem
 from xknxeditor.namespaces.intermediate.load_procedure_style_t import LoadProcedureStyle
@@ -20,6 +21,7 @@ from xknxeditor.namespaces.intermediate.load_procedures_t_load_procedure import 
 )
 from xknxeditor.namespaces.intermediate.master_data_t import MasterData
 from xknxeditor.namespaces.intermediate.procedure_type_t import ProcedureType
+from xknxeditor.namespaces.intermediate.resource_access_t import ResourceAccess
 
 _MASK = "MV-0705"
 
@@ -33,11 +35,20 @@ def _application(style: LoadProcedureStyle, *fragments: object) -> object:
 
 
 def _master_with_default(*controls: object) -> MasterData:
-    default = SimpleNamespace(procedure_type=ProcedureType.LOAD, choice=list(controls))
+    default = SimpleNamespace(
+        procedure_type=ProcedureType.LOAD,
+        procedure_sub_type=LdCtrlProcType.ALL,
+        access=[ResourceAccess.REMOTE],
+        choice=list(controls),
+    )
     mask = SimpleNamespace(
         id=_MASK,
         hawk_configuration_data=[
-            SimpleNamespace(procedures=SimpleNamespace(procedure=[default]))
+            SimpleNamespace(
+                interface_objects=None,
+                legacy_version=None,
+                procedures=SimpleNamespace(procedure=[default]),
+            )
         ],
     )
     return cast(
@@ -96,21 +107,34 @@ def test_default_procedure_drops_unmatched_merge_placeholders() -> None:
     assert [type(c).__name__ for c in controls] == ["LdCtrlConnect", "LdCtrlRestart"]
 
 
-def test_merged_without_master_falls_back_to_application() -> None:
+def test_merged_without_master_rejected() -> None:
     application = _application(
         LoadProcedureStyle.MERGED_PROCEDURE,
         _fragment(0, LdCtrlConnect()),
     )
-    controls = resolve_download_controls(cast("object", application))  # type: ignore[arg-type]
-    assert [type(c).__name__ for c in controls] == ["LdCtrlConnect"]
+    import pytest
+
+    from xknxeditor.download.errors import UnsupportedProcedureError
+
+    with pytest.raises(UnsupportedProcedureError, match="master data is required"):
+        resolve_download_controls(application)  # type: ignore[arg-type]
 
 
 def _master_with_unload(*controls: object) -> MasterData:
-    unload = SimpleNamespace(procedure_type=ProcedureType.UNLOAD, choice=list(controls))
+    unload = SimpleNamespace(
+        procedure_type=ProcedureType.UNLOAD,
+        procedure_sub_type=LdCtrlProcType.ALL,
+        access=[ResourceAccess.REMOTE],
+        choice=list(controls),
+    )
     mask = SimpleNamespace(
         id=_MASK,
         hawk_configuration_data=[
-            SimpleNamespace(procedures=SimpleNamespace(procedure=[unload]))
+            SimpleNamespace(
+                interface_objects=None,
+                legacy_version=None,
+                procedures=SimpleNamespace(procedure=[unload]),
+            )
         ],
     )
     return cast(
@@ -187,3 +211,85 @@ def test_mask_authorize_levels_without_master_is_zero() -> None:
 def test_mask_authorize_levels_unknown_mask_is_zero() -> None:
     master = _master_with_features(_feature("AuthorizeLevels", 16))
     assert mask_authorize_levels(master, "MV-9999") == 0
+
+
+def test_system_b_selection_uses_scope_and_second_application() -> None:
+    from xknxeditor.download.scope import DownloadScope
+    from xknxeditor.namespaces.intermediate.ld_ctrl_load_t import LdCtrlLoad
+
+    from .test_group_communication import mask_fixture
+
+    app, master = mask_fixture()
+    # Put "all" first to ensure selection does not depend on template order.
+    procedures = (
+        master.mask_versions.mask_version[0]
+        .hawk_configuration_data[0]
+        .procedures.procedure
+    )
+    procedures[0], procedures[1] = procedures[1], procedures[0]
+    full = resolve_download_controls(app, master)
+    both = resolve_download_controls(app, master, has_application_program2=True)
+    group = resolve_download_controls(
+        app, master, scope=DownloadScope.GROUP_COMMUNICATION
+    )
+    parameters = resolve_download_controls(app, master, scope=DownloadScope.PARAMETERS)
+    assert [c.lsm_idx for c in full if isinstance(c, LdCtrlLoad)] == [4, 3, 1, 2]
+    assert [c.lsm_idx for c in both if isinstance(c, LdCtrlLoad)] == [5, 4, 3, 1, 2]
+    assert [c.lsm_idx for c in group if isinstance(c, LdCtrlLoad)] == [3, 1, 2]
+    assert [c.lsm_idx for c in parameters if isinstance(c, LdCtrlLoad)] == [4]
+
+
+def test_procedure_selection_enforces_access() -> None:
+    import pytest
+
+    from xknxeditor.download.errors import UnsupportedProcedureError
+    from xknxeditor.download.scope import DownloadScope
+
+    from .test_group_communication import mask_fixture
+
+    app, master = mask_fixture()
+    with pytest.raises(UnsupportedProcedureError, match="access=local1"):
+        resolve_download_controls(
+            app,
+            master,
+            scope=DownloadScope.GROUP_COMMUNICATION,
+            access=ResourceAccess.LOCAL1,
+        )
+    assert resolve_download_controls(app, master, access=ResourceAccess.LOCAL2)
+
+
+def test_partial_selection_prefers_combined_over_full_fallback() -> None:
+    from xknxeditor.download.scope import DownloadScope
+
+    from .test_group_communication import mask_fixture
+
+    app, master = mask_fixture()
+    procedures = (
+        master.mask_versions.mask_version[0]
+        .hawk_configuration_data[0]
+        .procedures.procedure
+    )
+    combined = next(p for p in procedures if p.procedure_sub_type.value == "par,grp")
+    procedures[:] = [p for p in procedures if p.procedure_sub_type.value != "grp"]
+    combined.choice = [LdCtrlConnect()]
+    assert resolve_download_controls(
+        app, master, scope=DownloadScope.GROUP_COMMUNICATION
+    ) == [LdCtrlConnect(applies_to=LdCtrlProcType.ALL)]
+
+
+def test_legacy_configuration_is_not_mixed_with_current_metadata() -> None:
+    from copy import deepcopy
+
+    from xknxeditor.download.scope import mask_object_types
+
+    from .test_group_communication import MAPPING, mask_fixture
+
+    app, master = mask_fixture()
+    configurations = master.mask_versions.mask_version[0].hawk_configuration_data
+    legacy = deepcopy(configurations[0])
+    legacy.legacy_version = 1
+    legacy.interface_objects.interface_object[3].object_type = 99
+    legacy.procedures.procedure[0].choice = [LdCtrlConnect()]
+    configurations.insert(0, legacy)
+    assert mask_object_types(master, "MV-07B0") == MAPPING
+    assert resolve_download_controls(app, master) != [LdCtrlConnect()]

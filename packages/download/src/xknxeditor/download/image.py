@@ -9,12 +9,14 @@ are part of the segment data as well; project specific values can be supplied vi
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from xknxeditor.namespaces.intermediate.application_program_static_t_code_relative_segment import (
+    ApplicationProgramStaticCodeRelativeSegment,
+)
 from xknxeditor.prod import Application
 from xknxeditor.prod.errors import EncodingError
 
@@ -89,26 +91,47 @@ class MemorySegment:
     address: int
     data: bytes
     mask: bytes | None = None
+    initialized_mask: bytes | None = None
+
+    def __post_init__(self) -> None:
+        for mask in (self.mask, self.initialized_mask):
+            if mask is not None and (
+                len(mask) != len(self.data) or any(b not in (0, 255) for b in mask)
+            ):
+                raise ImageError(
+                    "memory image requires one whole-byte mask per data byte"
+                )
 
     @property
     def end(self) -> int:
         """First address past this segment."""
         return self.address + len(self.data)
 
-    def masked_runs(self) -> list[tuple[int, bytes]]:
+    def masked_runs(
+        self, *, include_initialized: bool = False
+    ) -> list[tuple[int, bytes]]:
         """Return ``(address, data)`` for each contiguous run this segment writes.
 
         With no mask the whole block is one run; otherwise each maximal run of
         ``0xFF`` mask bytes becomes one write.
         """
-        if self.mask is None:
+        mask = self.mask
+        if (
+            include_initialized
+            and self.initialized_mask is not None
+            and mask is not None
+        ):
+            mask = bytes(
+                a | b for a, b in zip(mask, self.initialized_mask, strict=True)
+            )
+        if mask is None:
             return [(self.address, self.data)] if self.data else []
         runs: list[tuple[int, bytes]] = []
         i, n = 0, len(self.data)
         while i < n:
-            if self.mask[i]:
+            if mask[i]:
                 j = i
-                while j < n and self.mask[j]:
+                while j < n and mask[j]:
                     j += 1
                 runs.append((self.address + i, bytes(self.data[i:j])))
                 i = j
@@ -144,6 +167,15 @@ class PropertyValue:
     property_id: int
     occurrence: int
     data: bytes
+    element_size: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectMemorySegment:
+    """Application memory keyed by LSM index and relative offset, not object type."""
+
+    object_index: int
+    memory: MemorySegment
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +192,7 @@ class DownloadImage:
     # object (type 6, relative memory), BCU1 via ``LdCtrlWriteMem`` in the ``LcFilter`` absolute
     # address space. A single source of truth for both write paths.
     filter_table: bytes | None = None
+    application_segments: tuple[ObjectMemorySegment, ...] = ()
 
     def relative_segment(self, object_type: int) -> RelativeSegment | None:
         """Return the relative segment for an interface object type, if any."""
@@ -190,7 +223,9 @@ class DownloadImage:
         except ImageError:
             return None
 
-    def masked_writes(self, address: int, size: int) -> list[tuple[int, bytes]] | None:
+    def masked_writes(
+        self, address: int, size: int, *, include_initialized: bool = False
+    ) -> list[tuple[int, bytes]] | None:
         """Return the ``(address, data)`` runs to write within ``[address, size)``.
 
         Collects the masked runs of every segment that *overlaps* the range,
@@ -219,7 +254,9 @@ class DownloadImage:
             if segment.address >= end or segment.end <= address:
                 continue  # no overlap with the requested range
             covered = True
-            for run_address, run_data in segment.masked_runs():
+            for run_address, run_data in segment.masked_runs(
+                include_initialized=include_initialized
+            ):
                 lo = max(run_address, address)
                 hi = min(run_address + len(run_data), end)
                 if lo < hi:
@@ -271,15 +308,50 @@ def build_image(
         encoded = ui.encode_to_memory_masked()
     except EncodingError as exc:
         raise ImageError(f"cannot encode memory image: {exc}") from exc
-    # Skip segments the encoder produced with an all-zero mask: they write nothing
-    # (e.g. the address/association/com-object table segments, which carry no
-    # parameter data - those tables are built from the group communication below).
-    # Keeping them would duplicate the table addresses in the image.
-    segments = [
-        MemorySegment(address=base_addresses[segment_id], data=data, mask=mask)
-        for segment_id, (data, mask) in encoded.items()
-        if data and segment_id in base_addresses and any(mask)
-    ]
+    static = application.program.static
+    code = static.code
+    declarations = (
+        {s.id: s for s in (*code.absolute_segment, *code.relative_segment)}
+        if code
+        else {}
+    )
+    table_ids = {
+        table.code_segment
+        for table in (
+            static.address_table,
+            static.association_table,
+            static.com_object_table,
+        )
+        if table is not None
+    }
+    segments: list[MemorySegment] = []
+    application_segments: list[ObjectMemorySegment] = []
+    for segment_id, (data, mask) in encoded.items():
+        if not data or segment_id not in base_addresses:
+            continue
+        declaration = declarations.get(segment_id)
+        seed = declaration.data if declaration is not None else None
+        initialized = bytes([0xFF]) * min(len(seed or b""), len(data))
+        initialized = initialized.ljust(len(data), b"\x00")
+        if declaration is not None and declaration.mask is not None:
+            if len(declaration.mask) != len(data):
+                raise ImageError(f"initialized mask length mismatch for {segment_id}")
+            initialized = bytes(
+                a & b for a, b in zip(initialized, declaration.mask, strict=True)
+            )
+        if segment_id in table_ids:
+            # Table builders supply initialized table bytes. Retain any parameters
+            # sharing this code segment, as the earlier image builder did.
+            initialized = bytes(len(data))
+        if not any(mask) and not any(initialized):
+            continue
+        memory = MemorySegment(base_addresses[segment_id], data, mask, initialized)
+        if isinstance(declaration, ApplicationProgramStaticCodeRelativeSegment):
+            application_segments.append(
+                ObjectMemorySegment(declaration.load_state_machine, memory)
+            )
+        else:
+            segments.append(memory)
 
     relative_segments: list[RelativeSegment] = []
     if group_communication is not None:
@@ -322,13 +394,24 @@ def build_image(
         if data
     )
 
-    # Map each relative segment (id "..._RS-<objidx>-...") to its data, so the MCB
-    # table CRC for that interface object can be computed at write time.
+    # Keep complete object data for offline validation. Never overwrite an earlier
+    # segment, infer identity from an ID string, or invent bytes for gaps.
     object_segments: dict[int, bytes] = {}
-    for segment_id, (data, _mask) in encoded.items():
-        match = re.search(r"_RS-(\d+)-", segment_id)
-        if match and data:
-            object_segments[int(match.group(1))] = data
+    for index in {s.object_index for s in application_segments}:
+        data = bytearray()
+        for segment in sorted(
+            (s.memory for s in application_segments if s.object_index == index),
+            key=lambda s: s.address,
+        ):
+            if segment.address != len(data):
+                if segment.address < len(data):
+                    raise ImageError(
+                        f"overlapping application segments for object {index}"
+                    )
+                break
+            data.extend(segment.data)
+        else:
+            object_segments[index] = bytes(data)
 
     return DownloadImage(
         segments=tuple(segments),
@@ -336,6 +419,7 @@ def build_image(
         relative_segments=tuple(relative_segments),
         object_segments=MappingProxyType(object_segments),
         filter_table=filter_table,
+        application_segments=tuple(application_segments),
     )
 
 
@@ -364,13 +448,11 @@ def _group_communication_segments(
         if com_object is not None:
             number_of[ref_id] = com_object.number
 
-    group_addresses = sorted({link.group_address for link in gc.links})
+    links = _active_links(ui, gc, number_of)
+    group_addresses = sorted({link.group_address for link in links})
+    _validate_table_capacity(application, group_addresses, [])
     index_of = {address: i + 1 for i, address in enumerate(group_addresses)}
-    linked_numbers = {
-        number_of[link.com_object_ref_id]
-        for link in gc.links
-        if link.com_object_ref_id in number_of
-    }
+    linked_numbers = {number_of[link.com_object_ref_id] for link in links}
 
     result: list[MemorySegment] = []
     com_object_table = static.com_object_table
@@ -416,10 +498,9 @@ def _group_communication_segments(
                     number_of[link.com_object_ref_id],
                     sending=link.sending,
                 )
-                for link in gc.links
-                if link.com_object_ref_id in number_of
-                and link.group_address in index_of
+                for link in links
             ]
+            _validate_table_capacity(application, group_addresses, associations)
             data = build_association_table(associations)
             address = base + (association_table.offset or 0)
             result.append(MemorySegment(address, data, mask=b"\xff" * len(data)))
@@ -437,7 +518,7 @@ def _group_communication_relative_segments(
     (System B), keyed here by interface object type. Group addresses come from
     the links; associations reference a group address by its address-table index
     and a group object by its number; the group object table carries flags and
-    size for every linked object and leaves the rest empty.
+    size for every active object, including unlinked objects with communication disabled.
     """
     from xknxeditor.prod.parser_v2.application_indexer import ApplicationIndexer
 
@@ -448,7 +529,8 @@ def _group_communication_relative_segments(
         if com_object is not None:
             number_of[ref_id] = com_object.number
 
-    group_addresses = sorted({link.group_address for link in gc.links})
+    links = _active_links(ui, gc, number_of)
+    group_addresses = sorted({link.group_address for link in links})
     index_of = group_address_index_b(group_addresses)
 
     associations = [
@@ -457,9 +539,9 @@ def _group_communication_relative_segments(
             number_of[link.com_object_ref_id],
             sending=link.sending,
         )
-        for link in gc.links
-        if link.com_object_ref_id in number_of and link.group_address in index_of
+        for link in links
     ]
+    _validate_table_capacity(application, group_addresses, associations)
     linked_numbers = {association.group_object_number for association in associations}
 
     # Prefer explicit descriptors (recovered off the device) over UI resolution: a
@@ -488,14 +570,63 @@ def _group_communication_relative_segments(
     ]
 
 
+def _active_links(
+    ui: DynamicUI, gc: GroupCommunication, number_of: dict[str, int]
+) -> list[GroupObjectLink]:
+    from xknxeditor.prod.parser_v2.ui import UiComObject, UiParameterBlock, UiTab
+
+    active: set[str] = set()
+    stack: list[object] = list(ui.ui())
+    while stack:
+        node = stack.pop()
+        if isinstance(node, UiComObject):
+            active.add(node.ref_id)
+            number_of[node.ref_id] = node.number
+        elif isinstance(node, (UiTab, UiParameterBlock)):
+            stack.extend(node.children)
+    active = ui.instantiated_com_object_ref_ids() or active
+    result: list[GroupObjectLink] = []
+    for link in gc.links:
+        number = number_of.get(link.com_object_ref_id)
+        if number is None:
+            raise ImageError(
+                f"unknown communication object ref {link.com_object_ref_id!r}"
+            )
+        if gc.group_object_descriptors is not None:
+            enabled = number in gc.group_object_descriptors
+        else:
+            enabled = link.com_object_ref_id in active
+        if enabled:
+            result.append(link)
+    return result
+
+
+def _validate_table_capacity(
+    application: Application,
+    addresses: Sequence[int],
+    associations: Sequence[Association],
+) -> None:
+    for name, table, count in (
+        ("address", application.program.static.address_table, len(addresses)),
+        (
+            "association",
+            application.program.static.association_table,
+            len(associations),
+        ),
+    ):
+        if table is not None and count > table.max_entries:
+            raise ImageError(
+                f"{name} table has {count} entries; MaxEntries={table.max_entries}"
+            )
+
+
 def _resolved_group_object_descriptors(
     ui: DynamicUI, linked_numbers: set[int]
 ) -> dict[int, tuple[int, int]]:
-    """Map each linked object's number to its ``(flag byte, size code)``.
+    """Map each active object's number to its ``(flag byte, size code)``.
 
     Walks the configured UI so flags and size come from the resolved com object
-    reference (the values a download actually writes). Only linked objects get a
-    descriptor; the table formatter leaves every other slot empty.
+    reference. Unlinked active objects retain all flags except communication.
     """
     from xknxeditor.prod.parser_v2.ui import UiComObject, UiParameterBlock, UiTab
 
@@ -504,15 +635,13 @@ def _resolved_group_object_descriptors(
     while stack:
         node = stack.pop()
         if isinstance(node, UiComObject):
-            if node.number not in linked_numbers:
-                continue
             try:
                 size = size_code(node.object_size)
             except ImageError:
                 continue
             flags = com_object_flag_byte(
                 priority=node.priority or "Low",
-                communication=node.communication,
+                communication=node.communication and node.number in linked_numbers,
                 read=node.read,
                 write=node.write,
                 transmit=node.transmit,

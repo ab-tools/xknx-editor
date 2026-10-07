@@ -1,0 +1,191 @@
+<!-- System B (MV-07B0) sample master data: Procedures and InterfaceObjects.
+     see .references/ets_map.md -->
+<HawkConfigurationData>
+  <Procedures>
+    <Procedure ProcedureType="Load" ProcedureSubType="ap1" Access="remote local2">
+      <LdCtrlConnect />
+      <LdCtrlMerge MergeId="1" />
+      <LdCtrlMapError OriginalError="3221498632" MappedError="0" />
+      <LdCtrlUnload LsmIdx="5" />
+      <LdCtrlMapError OriginalError="3221498632" MappedError="3221498632" />
+      <LdCtrlUnload LsmIdx="4" />
+      <LdCtrlUnload LsmIdx="3" />
+      <LdCtrlUnload LsmIdx="2" />
+      <LdCtrlUnload LsmIdx="1" />
+      <LdCtrlLoad LsmIdx="4" />
+      <LdCtrlMerge MergeId="2" />
+      <LdCtrlLoad LsmIdx="3" />
+      <LdCtrlRelSegment LsmIdx="3" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="1" />
+      <LdCtrlRelSegment LsmIdx="1" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="2" />
+      <LdCtrlRelSegment LsmIdx="2" Size="2" Mode="0" Fill="0" />
+      <LdCtrlMerge MergeId="4" />
+      <LdCtrlWriteRelMem ObjIdx="3" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="2" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="1" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteProp ObjIdx="4" PropId="13" Verify="true" InlineData="0000000000" />
+      <LdCtrlLoadCompleted LsmIdx="4" />
+      <LdCtrlLoadCompleted LsmIdx="3" />
+      <LdCtrlLoadCompleted LsmIdx="2" />
+      <LdCtrlLoadCompleted LsmIdx="1" />
+      <LdCtrlMerge MergeId="6" />
+      <LdCtrlMerge MergeId="7" />
+      <LdCtrlRestart />
+    </Procedure>
+    <Procedure ProcedureType="Load" ProcedureSubType="all" Access="remote local2">
+      <LdCtrlConnect />
+      <LdCtrlMerge MergeId="1" />
+      <LdCtrlUnload LsmIdx="5" />
+      <LdCtrlUnload LsmIdx="4" />
+      <LdCtrlUnload LsmIdx="3" />
+      <LdCtrlUnload LsmIdx="2" />
+      <LdCtrlUnload LsmIdx="1" />
+      <LdCtrlLoad LsmIdx="5" />
+      <LdCtrlMerge MergeId="3" />
+      <LdCtrlLoad LsmIdx="4" />
+      <LdCtrlMerge MergeId="2" />
+      <LdCtrlLoad LsmIdx="3" />
+      <LdCtrlRelSegment LsmIdx="3" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="1" />
+      <LdCtrlRelSegment LsmIdx="1" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="2" />
+      <LdCtrlRelSegment LsmIdx="2" Size="2" Mode="0" Fill="0" />
+      <LdCtrlMerge MergeId="5" />
+      <LdCtrlMerge MergeId="4" />
+      <LdCtrlWriteRelMem ObjIdx="3" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="2" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="1" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteProp ObjIdx="5" PropId="13" Verify="true" InlineData="0000000000" />
+      <LdCtrlWriteProp ObjIdx="4" PropId="13" Verify="true" InlineData="0000000000" />
+      <LdCtrlLoadCompleted LsmIdx="5" />
+      <LdCtrlLoadCompleted LsmIdx="4" />
+      <LdCtrlLoadCompleted LsmIdx="3" />
+      <LdCtrlLoadCompleted LsmIdx="2" />
+      <LdCtrlLoadCompleted LsmIdx="1" />
+      <LdCtrlMerge MergeId="6" />
+      <LdCtrlMerge MergeId="7" />
+      <LdCtrlRestart />
+    </Procedure>
+    <Procedure ProcedureType="Load" ProcedureSubType="grp" Access="remote local2">
+      <LdCtrlConnect />
+      <LdCtrlUnload LsmIdx="3" />
+      <LdCtrlUnload LsmIdx="2" />
+      <LdCtrlUnload LsmIdx="1" />
+      <LdCtrlLoad LsmIdx="3" />
+      <LdCtrlRelSegment LsmIdx="3" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="1" />
+      <LdCtrlRelSegment LsmIdx="1" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="2" />
+      <LdCtrlRelSegment LsmIdx="2" Size="2" Mode="0" Fill="0" />
+      <LdCtrlWriteRelMem ObjIdx="3" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="2" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="1" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlLoadCompleted LsmIdx="3" />
+      <LdCtrlLoadCompleted LsmIdx="2" />
+      <LdCtrlLoadCompleted LsmIdx="1" />
+      <LdCtrlMerge MergeId="7" />
+      <LdCtrlRestart />
+    </Procedure>
+    <Procedure ProcedureType="Load" ProcedureSubType="par" Access="remote local2">
+      <LdCtrlConnect />
+      <LdCtrlLoadImageProp ObjIdx="4" PropId="7" />
+      <LdCtrlLoadImageProp ObjIdx="5" PropId="7" />
+      <LdCtrlUnload LsmIdx="5" />
+      <LdCtrlUnload LsmIdx="4" />
+      <LdCtrlLoad LsmIdx="5" />
+      <LdCtrlMerge MergeId="3" />
+      <LdCtrlCompareProp ObjIdx="5" PropId="7" InlineData="00000000" />
+      <LdCtrlLoad LsmIdx="4" />
+      <LdCtrlMerge MergeId="2" />
+      <LdCtrlCompareProp ObjIdx="4" PropId="7" InlineData="00000000" />
+      <LdCtrlMerge MergeId="5" />
+      <LdCtrlMerge MergeId="4" />
+      <LdCtrlWriteProp ObjIdx="5" PropId="13" Verify="true" InlineData="0000000000" />
+      <LdCtrlWriteProp ObjIdx="4" PropId="13" Verify="true" InlineData="0000000000" />
+      <LdCtrlLoadCompleted LsmIdx="5" />
+      <LdCtrlLoadCompleted LsmIdx="4" />
+      <LdCtrlMerge MergeId="6" />
+      <LdCtrlMerge MergeId="7" />
+      <LdCtrlRestart />
+    </Procedure>
+    <Procedure ProcedureType="Load" ProcedureSubType="par,grp" Access="remote local2">
+      <LdCtrlConnect />
+      <LdCtrlLoadImageProp ObjIdx="4" PropId="7" />
+      <LdCtrlLoadImageProp ObjIdx="5" PropId="7" />
+      <LdCtrlUnload LsmIdx="5" />
+      <LdCtrlUnload LsmIdx="4" />
+      <LdCtrlUnload LsmIdx="3" />
+      <LdCtrlUnload LsmIdx="2" />
+      <LdCtrlUnload LsmIdx="1" />
+      <LdCtrlLoad LsmIdx="5" />
+      <LdCtrlMerge MergeId="3" />
+      <LdCtrlCompareProp ObjIdx="5" PropId="7" InlineData="00000000" />
+      <LdCtrlLoad LsmIdx="4" />
+      <LdCtrlMerge MergeId="2" />
+      <LdCtrlCompareProp ObjIdx="4" PropId="7" InlineData="00000000" />
+      <LdCtrlLoad LsmIdx="3" />
+      <LdCtrlRelSegment LsmIdx="3" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="1" />
+      <LdCtrlRelSegment LsmIdx="1" Size="2" Mode="0" Fill="0" />
+      <LdCtrlLoad LsmIdx="2" />
+      <LdCtrlRelSegment LsmIdx="2" Size="2" Mode="0" Fill="0" />
+      <LdCtrlMerge MergeId="5" />
+      <LdCtrlMerge MergeId="4" />
+      <LdCtrlWriteRelMem ObjIdx="3" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="2" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteRelMem ObjIdx="1" Offset="0" Size="1048576" Verify="true" />
+      <LdCtrlWriteProp ObjIdx="5" PropId="13" Verify="true" InlineData="0000000000" />
+      <LdCtrlWriteProp ObjIdx="4" PropId="13" Verify="true" InlineData="0000000000" />
+      <LdCtrlLoadCompleted LsmIdx="5" />
+      <LdCtrlLoadCompleted LsmIdx="4" />
+      <LdCtrlLoadCompleted LsmIdx="3" />
+      <LdCtrlLoadCompleted LsmIdx="2" />
+      <LdCtrlLoadCompleted LsmIdx="1" />
+      <LdCtrlMerge MergeId="6" />
+      <LdCtrlMerge MergeId="7" />
+      <LdCtrlRestart />
+    </Procedure>
+    <Procedure ProcedureType="Load" ProcedureSubType="cfg" Access="remote local2">
+      <LdCtrlConnect />
+      <LdCtrlDisconnect />
+    </Procedure>
+    <Procedure ProcedureType="Unload" ProcedureSubType="all" Access="remote local2">
+      <LdCtrlConnect />
+      <LdCtrlUnload LsmIdx="1" />
+      <LdCtrlUnload LsmIdx="2" />
+      <LdCtrlUnload LsmIdx="3" />
+      <LdCtrlUnload LsmIdx="4" />
+      <LdCtrlMapError OriginalError="3221498632" MappedError="0" />
+      <LdCtrlUnload LsmIdx="5" />
+      <LdCtrlMapError OriginalError="3221498632" MappedError="3221498632" />
+      <LdCtrlDisconnect />
+    </Procedure>
+  </Procedures>
+  <InterfaceObjects>
+    <InterfaceObject Index="0" ObjectType="0">
+      <Property PropertyID="25" PropertyDataType="PDT_VERSION" />
+    </InterfaceObject>
+    <InterfaceObject Index="1" ObjectType="1">
+      <Property PropertyID="7" PropertyDataType="PDT_UNSIGNED_LONG" />
+      <Property PropertyID="27" PropertyDataType="PDT_GENERIC_08" />
+    </InterfaceObject>
+    <InterfaceObject Index="2" ObjectType="2">
+      <Property PropertyID="7" PropertyDataType="PDT_UNSIGNED_LONG" />
+      <Property PropertyID="27" PropertyDataType="PDT_GENERIC_08" />
+    </InterfaceObject>
+    <InterfaceObject Index="3" ObjectType="9">
+      <Property PropertyID="7" PropertyDataType="PDT_UNSIGNED_LONG" />
+      <Property PropertyID="27" PropertyDataType="PDT_GENERIC_08" />
+    </InterfaceObject>
+    <InterfaceObject Index="4" ObjectType="3">
+      <Property PropertyID="7" PropertyDataType="PDT_UNSIGNED_LONG" />
+      <Property PropertyID="27" PropertyDataType="PDT_GENERIC_08" />
+    </InterfaceObject>
+    <InterfaceObject Index="5" ObjectType="4">
+      <Property PropertyID="7" PropertyDataType="PDT_UNSIGNED_LONG" />
+      <Property PropertyID="27" PropertyDataType="PDT_GENERIC_08" />
+    </InterfaceObject>
+  </InterfaceObjects>
+</HawkConfigurationData>
+        

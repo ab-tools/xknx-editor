@@ -19,11 +19,9 @@ if True:  # keep import used for typing without a runtime dependency cycle
     from xknxeditor.prod import Application
 
 
-def test_known_gap_message_names_standard_service() -> None:
-    message = gaps.describe_missing("LdCtrlOnError")
-    assert "LdCtrlOnError" in message
-    assert "load procedure error-branch" in message
-    assert "KNX Standard v3.0.0" in message
+def test_supported_control_metadata_is_not_a_standalone_gap() -> None:
+    assert "LdCtrlOnError" not in gaps.KNOWN_GAPS
+    assert "LdCtrlProcType" not in gaps.KNOWN_GAPS
 
 
 def test_unknown_control_message_flags_registry() -> None:

@@ -14,6 +14,7 @@ callers degrade with a clear message rather than crashing.
 from __future__ import annotations
 
 import contextlib
+import time
 from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
@@ -25,6 +26,8 @@ from xknxeditor.proj import fetch_master_xml
 # The project/23 master, matching the XML namespace used across the app (see online_catalog).
 _SCHEMA = "23"
 _CACHE_NAME = "knx_master.xml"
+# Re-fetch the cached master once it is older than this; a failed refresh keeps the old cache.
+_MAX_CACHE_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,22 +43,45 @@ def _cache_path() -> Path:
     return config_dir() / _CACHE_NAME
 
 
-def _load_bytes() -> tuple[bytes, str]:
-    """Return the master XML bytes and their source ("cached"/"fetched").
+def _is_stale(cache: Path) -> bool:
+    """True when the cache is older than the max age (or its age cannot be read)."""
+    try:
+        return time.time() - cache.stat().st_mtime > _MAX_CACHE_AGE_SECONDS
+    except OSError:
+        return True
 
-    Prefers the per-user cache; otherwise downloads the signed master for this schema and caches
-    it. Raises ``OSError``/``ValueError`` when no cache exists and the download fails.
-    """
-    cache = _cache_path()
-    if cache.exists():
-        return cache.read_bytes(), "cached"
+
+def _download_and_cache(cache: Path) -> bytes:
+    """Fetch the signed master for this schema and refresh the cache (best effort)."""
     data = fetch_master_xml(
         schema=_SCHEMA
     )  # signed + namespace-verified; raises on failure
     # a read-only cache dir just means we re-fetch next time
     with contextlib.suppress(OSError):
         cache.write_bytes(data)
-    return data, "fetched"
+    return data
+
+
+def _load_bytes() -> tuple[bytes, str]:
+    """Return the master XML bytes and their source ("cached"/"fetched").
+
+    Prefers a fresh per-user cache. A cache older than ``_MAX_CACHE_AGE_SECONDS`` is refreshed from
+    the signed master; if that download fails the existing (stale) cache is used. With no cache at
+    all, downloads and caches it. Raises ``OSError``/``ValueError`` when no cache exists and the
+    download fails.
+    """
+    cache = _cache_path()
+    if cache.exists():
+        if not _is_stale(cache):
+            return cache.read_bytes(), "cached"
+        try:
+            return _download_and_cache(cache), "fetched"
+        except (OSError, ValueError):
+            return (
+                cache.read_bytes(),
+                "cached",
+            )  # keep the stale copy until a refresh succeeds
+    return _download_and_cache(cache), "fetched"
 
 
 def load_master() -> tuple[MasterData, MasterDataInfo]:

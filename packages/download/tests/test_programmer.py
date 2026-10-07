@@ -3,10 +3,24 @@
 from __future__ import annotations
 
 import pytest
-from xknx.telegram.apci import MemoryRead, MemoryWrite, PropertyValueWrite
+from xknx.telegram.apci import (
+    MemoryRead,
+    MemoryWrite,
+    PropertyValueRead,
+    PropertyValueResponse,
+    PropertyValueWrite,
+)
 
-from xknxeditor.download.errors import LoadStateError, VerificationError
-from xknxeditor.download.load_state import LoadState, start_loading
+from xknxeditor.download.errors import (
+    LoadStateError,
+    PropertyAccessRejected,
+    VerificationError,
+)
+from xknxeditor.download.load_state import (
+    PID_LOAD_STATE_CONTROL,
+    LoadState,
+    start_loading,
+)
 from xknxeditor.download.programmer import PID_OBJECT_TYPE, DeviceProgrammer
 
 from .conftest import FakeDevice
@@ -68,13 +82,10 @@ def test_memory_chunk_size_accounts_for_secure_overhead() -> None:
     # 13 before the memory overhead is applied: 55 - 13 - 3 = 39.
     programmer = DeviceProgrammer(FakeDevice(), max_apdu_length=55, apdu_overhead=13)
     assert programmer.memory_chunk_size == 39
-    # A tiny APDU still yields at least a 1-octet chunk.
-    assert (
-        DeviceProgrammer(
+    with pytest.raises(VerificationError, match="APDU budget"):
+        _ = DeviceProgrammer(
             FakeDevice(), max_apdu_length=15, apdu_overhead=13
         ).memory_chunk_size
-        == 1
-    )
 
 
 async def test_write_memory_is_chunked() -> None:
@@ -124,6 +135,24 @@ async def test_property_round_trip() -> None:
     assert await programmer.read_property(5, 0x33) == b"\xaa\xbb"
 
 
+async def test_unverified_property_write_tolerates_empty_response() -> None:
+    # An empty (0-element) ordinary write confirmation is a rejection when
+    # the write is verified; an unverified write accepts it as done. A device may
+    # confirm a property write (e.g. the MCB table) with 0 elements.
+    device = FakeDevice()
+    device.absent_objects = {4}
+    programmer = DeviceProgrammer(device)
+    assert await programmer.write_property(4, 27, bytes(10), verify=False) == b""
+
+
+async def test_verified_property_write_rejects_empty_response() -> None:
+    device = FakeDevice()
+    device.absent_objects = {4}
+    programmer = DeviceProgrammer(device)
+    with pytest.raises(PropertyAccessRejected):
+        await programmer.write_property(4, 27, bytes(10), verify=True)
+
+
 async def test_write_property_chunks_large_value() -> None:
     device = FakeDevice()
     programmer = DeviceProgrammer(device, max_apdu_length=15)
@@ -148,8 +177,9 @@ async def test_read_table_reference() -> None:
     assert await DeviceProgrammer(device).read_table_reference(2) == 0x1234
 
 
-def test_memory_chunk_size_never_below_one() -> None:
-    assert DeviceProgrammer(FakeDevice(), max_apdu_length=2).memory_chunk_size == 1
+def test_memory_chunk_size_rejects_impossible_budget() -> None:
+    with pytest.raises(VerificationError, match="APDU budget"):
+        _ = DeviceProgrammer(FakeDevice(), max_apdu_length=2).memory_chunk_size
 
 
 async def test_locate_object_by_type_and_occurrence() -> None:
@@ -208,6 +238,59 @@ async def test_send_load_event_timeout_raises() -> None:
         )
 
 
+@pytest.mark.parametrize("retries", [1, 2])
+async def test_load_accepts_loaded_from_poll(retries: int) -> None:
+    class FastLoadDevice(FakeDevice):
+        def _handle_property_write(self, payload: PropertyValueWrite) -> None:
+            self.load_states[payload.object_index] = LoadState.UNLOADING
+
+        def _handle_property_read(
+            self, payload: PropertyValueRead
+        ) -> PropertyValueResponse:
+            response = super()._handle_property_read(payload)
+            self.load_states[payload.object_index] = LoadState.LOADED
+            return response
+
+    device = FastLoadDevice()
+    # Write confirms UNLOADING, then the first poll is already LOADED. Check
+    # both the last allowed poll and a poll with retries remaining.
+    await DeviceProgrammer(device).send_load_event(
+        1,
+        start_loading(),
+        LoadState.LOADING,
+        also_accept=LoadState.LOADED,
+        retries=retries,
+        retry_delay=0,
+    )
+    assert sum(isinstance(p, PropertyValueRead) for p in device.sent) == 1
+
+
+@pytest.mark.parametrize(
+    "state", [LoadState.ERROR, LoadState.UNLOADED, LoadState.UNLOADING]
+)
+async def test_load_alternative_does_not_hide_failure(state: LoadState) -> None:
+    class StuckDevice(FakeDevice):
+        def _handle_property_write(self, payload: PropertyValueWrite) -> None:
+            self.load_states[payload.object_index] = state
+
+    device = StuckDevice()
+    with pytest.raises(LoadStateError, match=state.name):
+        await DeviceProgrammer(device).send_load_event(
+            1,
+            start_loading(),
+            LoadState.LOADING,
+            also_accept=LoadState.LOADED,
+            retries=2,
+            retry_delay=0,
+        )
+    reads = [
+        p
+        for p in device.sent
+        if isinstance(p, PropertyValueRead) and p.property_id == PID_LOAD_STATE_CONTROL
+    ]
+    assert len(reads) == (0 if state == LoadState.ERROR else 2)
+
+
 async def test_restart() -> None:
     device = FakeDevice()
     await DeviceProgrammer(device).restart()
@@ -229,3 +312,108 @@ async def test_authorize_reports_locked_level() -> None:
     level = await DeviceProgrammer(device).authorize(key=0x11223344)
     assert level == 15
     assert device.authorize_keys == [0x11223344]
+
+
+@pytest.mark.parametrize("operation", ["read", "write"])
+@pytest.mark.parametrize(
+    ("count", "start", "data", "exception", "message"),
+    [
+        (0, 1, b"", PropertyAccessRejected, "0 elements"),
+        (1, 2, b"\x02", VerificationError, "start index"),
+        (2, 1, b"\x02", VerificationError, "element count"),
+        (1, 1, b"", LoadStateError, "empty load state"),
+        (1, 1, b"\xff", LoadStateError, "unknown load state"),
+    ],
+)
+async def test_load_state_response_validation(
+    operation, count, start, data, exception, message
+) -> None:
+    from xknx.telegram.apci import PropertyValueResponse
+
+    class ResponseDevice(FakeDevice):
+        def _handle_property_read(self, payload):
+            return PropertyValueResponse(
+                object_index=payload.object_index,
+                property_id=payload.property_id,
+                count=count,
+                start_index=start,
+                data=data,
+            )
+
+    device = ResponseDevice()
+    programmer = DeviceProgrammer(device)
+    with pytest.raises(exception, match=message):
+        if operation == "write":
+            await programmer.send_load_event(1, start_loading(), LoadState.LOADING)
+        else:
+            await programmer.read_load_state(1)
+    assert len(device.sent) == 1  # no fallback read hides a malformed write response
+
+
+async def test_pid5_is_strict_even_when_verify_false() -> None:
+    device = FakeDevice()
+    device.absent_objects = {1}
+    with pytest.raises(PropertyAccessRejected):
+        await DeviceProgrammer(device).write_property(
+            1, 5, start_loading(), verify=False
+        )
+
+
+async def test_optional_property_reads_still_tolerate_absence() -> None:
+    from xknx.telegram.apci import PropertyValueResponse
+
+    class AbsentDevice(FakeDevice):
+        def _handle_property_read(self, payload):
+            return PropertyValueResponse(
+                object_index=payload.object_index,
+                property_id=payload.property_id,
+                count=0,
+                start_index=payload.start_index,
+                data=b"",
+            )
+
+    programmer = DeviceProgrammer(AbsentDevice())
+    assert await programmer.read_property(0, 56) == b""
+    assert await programmer.read_max_apdu_length() == 15
+
+
+async def test_loaded_is_not_loading_and_every_poll_is_logged(caplog) -> None:
+    import logging
+
+    class StuckLoadedDevice(FakeDevice):
+        def _handle_property_write(self, payload):
+            self.load_states[payload.object_index] = LoadState.LOADED
+
+    device = StuckLoadedDevice()
+    programmer = DeviceProgrammer(device)
+    programmer.diagnostic_context = "control=(14, 30) target-index=1 target-type=1"
+    with (
+        caplog.at_level(logging.DEBUG, logger="xknxeditor.download.programmer"),
+        pytest.raises(LoadStateError, match="did not reach LOADING, last state LOADED"),
+    ):
+        await programmer.send_load_event(
+            1, start_loading(), LoadState.LOADING, retries=2, retry_delay=0
+        )
+    assert "control=(14, 30) target-index=1 target-type=1" in caplog.text
+    assert "event=01000000000000000000" in caplog.text
+    assert "count=1 start-index=1 data=01" in caplog.text
+    assert "poll=1/2 state=LOADED" in caplog.text
+    assert "poll=2/2 state=LOADED" in caplog.text
+
+
+async def test_state_is_decoded_from_first_octet() -> None:
+    from xknx.telegram.apci import PropertyValueResponse
+
+    class ResponseDevice(FakeDevice):
+        def _handle_property_read(self, payload):
+            return PropertyValueResponse(
+                object_index=payload.object_index,
+                property_id=5,
+                start_index=1,
+                data=b"\x01\x02",
+            )
+
+    with pytest.raises(LoadStateError, match="last state LOADED"):
+        await DeviceProgrammer(ResponseDevice()).send_load_event(
+            1, start_loading(), LoadState.LOADING, retries=0
+        )

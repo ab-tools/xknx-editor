@@ -41,21 +41,15 @@ if sys.stdout is None or sys.stderr is None:
     except Exception:
         pass
 
-# The "compat" build ships this marker plus Mesa's opengl32.dll next to the exe. Force the softpipe
-# gallium driver: pure C, NO LLVM JIT, so it renders on the CPU even in a GPU-less VM (UTM/QEMU on a
-# Mac, Windows-on-ARM x64 emulation) where llvmpipe's JIT would crash. Harmless in the normal build
-# (no marker -> not set, so the system/GPU OpenGL driver is used).
+# The "compat" build ships this marker plus Mesa's opengl32.dll next to the exe, so a GPU-less VM
+# still renders on the CPU. Use the llvmpipe gallium driver (LLVM JIT -> native code, multithreaded);
+# it is far faster than softpipe and runs on every VM we have tested (native x64 virtualization and
+# ARM64 under QEMU). softpipe (pure C, no JIT) stays reachable via GALLIUM_DRIVER=softpipe as a manual
+# fallback. Harmless in the normal build (no marker -> not set, so the system/GPU OpenGL is used).
 if getattr(sys, "frozen", False):
     _here = os.path.dirname(sys.executable)
-    # Mesa software-OpenGL compat build (bundled opengl32.dll next to the exe). Pick the gallium driver
-    # by architecture: on native ARM64, llvmpipe's LLVM JIT emits native ARM64 code and is fast; on x64
-    # it stays softpipe (pure C) because x64 llvmpipe crashes under ARM64 emulation. Override via
-    # GALLIUM_DRIVER. Harmless in the normal build (no marker -> not set, system/GPU OpenGL is used).
     if os.path.exists(os.path.join(_here, "software_gl.marker")):
-        import platform
-
-        _driver = "llvmpipe" if platform.machine() == "ARM64" else "softpipe"
-        os.environ.setdefault("GALLIUM_DRIVER", _driver)
+        os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
         os.environ.setdefault("MESA_GL_VERSION_OVERRIDE", "3.3")
         # Tell the app it is running on a CPU rasterizer so it can throttle the frame rate (main.py).
         os.environ.setdefault("XKNX_SOFTWARE_GL", "1")

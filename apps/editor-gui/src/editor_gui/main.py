@@ -211,6 +211,43 @@ def _myknx_product_name(product: dict[str, object], pid: str) -> str:
     return pid
 
 
+def _log_gl_renderer(log: Logger) -> None:
+    """Query glGetString once and log the active OpenGL vendor/renderer/version.
+
+    glGetString is a core GL 1.x entry point exported directly by the platform GL library, so no
+    GL loader or extension lookup is needed. Called from post_init, where the context is current.
+    Diagnostics only: any failure is swallowed so a missing/odd GL stack never blocks startup."""
+    import ctypes
+
+    gl_vendor, gl_renderer, gl_version = 0x1F00, 0x1F01, 0x1F02
+    try:
+        if sys.platform == "win32":
+            lib = ctypes.WinDLL("opengl32")
+        elif sys.platform == "darwin":
+            lib = ctypes.CDLL("/System/Library/Frameworks/OpenGL.framework/OpenGL")
+        else:
+            lib = ctypes.CDLL("libGL.so.1")
+        lib.glGetString.restype = ctypes.c_char_p
+        lib.glGetString.argtypes = [ctypes.c_uint]
+        vendor = lib.glGetString(gl_vendor)
+        renderer = lib.glGetString(gl_renderer)
+        version = lib.glGetString(gl_version)
+    except Exception as exc:  # diagnostics only; never fatal
+        log.debug("opengl query failed", error=str(exc))
+        return
+
+    def decode(value: bytes | None) -> str:
+        return value.decode("ascii", "replace") if value else "?"
+
+    log.info(
+        "opengl",
+        vendor=decode(vendor),
+        renderer=decode(renderer),
+        version=decode(version),
+        gallium_driver=os.environ.get("GALLIUM_DRIVER", ""),
+    )
+
+
 class KnxGuiApp:
     def __init__(self, catalog_path: Path) -> None:
         self._catalog_service_path = catalog_path
@@ -227,6 +264,10 @@ class KnxGuiApp:
         self._export_knxproj_dialog: pfd.save_file | None = None
         self._last_export_path: str | None = None
         self._file_dialogs_available: bool | None = None
+        # One-shot guard for the startup OpenGL renderer log (see _log_gl_renderer). Done from the
+        # frame path, not post_init, so the GL context is guaranteed current (a context-less
+        # glGetString segfaults at the C level and would be uncatchable).
+        self._gl_logged = False
         # Overwrite guard: the portable file dialog does not confirm replacing an existing file on
         # macOS (it wraps AppleScript's "choose file name"), so we ask here. Requests queue as
         # (target, action) pairs so a second dialog resolving mid-confirmation cannot drop the first.
@@ -2023,6 +2064,10 @@ class KnxGuiApp:
             self._log.warning(msg)
 
     def render_overlays(self) -> None:
+        # Log the active OpenGL renderer once, from the frame path (context guaranteed current).
+        if not self._gl_logged:
+            self._gl_logged = True
+            _log_gl_renderer(self._log)
         # Bring the Editor tab to the front when another view (Device Overview, Topology, Health)
         # selected a device. Consumed here (a per-frame global callback) rather than in the Editor
         # panel itself, because a background dock tab is not rendered and would never see the flag.
