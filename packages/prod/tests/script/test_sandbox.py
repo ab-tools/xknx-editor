@@ -132,9 +132,9 @@ def test_log_globals() -> None:
     logs: list[tuple[str, str]] = []
     ctx = ScriptContext(
         on_log=lambda level, msg: logs.append((level, msg)),
-        script="function h() { info('a'); Log.info('b'); warn('c'); error('d'); Debug('e'); return typeof getMessage; }",
+        script="function h() { info('a'); Log.info('b'); warn('c'); error('d'); Log.Debug('e'); return typeof getMessage + typeof Debug; }",
     )
-    assert ctx.invoke("h", []).value == "undefined"
+    assert ctx.invoke("h", []).value == "undefinedobject"
     assert logs == [
         ("info", "a"),
         ("info", "b"),

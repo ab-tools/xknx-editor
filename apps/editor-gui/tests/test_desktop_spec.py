@@ -19,6 +19,7 @@ _SPEC = Path(__file__).resolve().parent.parent / "xknx-editor.spec"
 # Extend this when adding a dependency that ships data loaded lazily at runtime.
 REQUIRED_RUNTIME_DATA = {
     "dukpy": "jsruntime/process_runtime.js",
+    "tzdata": "zoneinfo/Europe/Berlin",
 }
 
 
