@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from editor_gui.device import address_order
 from editor_gui.plugins.cockpit.strings import S
 from editor_gui.plugins.health.service import HealthService
 
@@ -38,17 +39,8 @@ class CockpitRow:
         return self.product_name or self.order_number
 
 
-def _address_key(address: str) -> tuple[int, int, int]:
-    """Numeric individual-address order; rows without a valid address come last."""
-    try:
-        area, line, number = (int(p) for p in address.split("."))
-    except ValueError:
-        return (1 << 16, 0, 0)
-    return (area, line, number)
-
-
 _SORT_KEYS: tuple[Callable[[CockpitRow], Any], ...] = (
-    lambda r: _address_key(r.individual_address),
+    lambda r: address_order(r.individual_address),
     lambda r: r.name.casefold(),
     lambda r: r.product.casefold(),
     lambda r: r.loaded_count,
@@ -63,7 +55,7 @@ def sort_rows(
     key = _SORT_KEYS[column]
     return sorted(
         rows,
-        key=lambda r: (key(r), _address_key(r.individual_address), r.node_id),
+        key=lambda r: (key(r), address_order(r.individual_address), r.node_id),
         reverse=descending,
     )
 
