@@ -34,6 +34,8 @@ class ParameterRefRefNode(DynamicNode):
             if self._param_ref.access is not None
             else self._param.access
         )
+        if self._param_type.plugin and access is not Access.NONE:
+            access = Access.READ
         if access is Access.NONE:
             return []
         local_ref_id = self._elem.ref_id

@@ -31,6 +31,9 @@ from xknxeditor.prod.parser_v2.ui.parameter import (
 
 # Parameters changed from their default are tinted to stand out.
 _CHANGED_COLOR = imgui.ImVec4(0.36, 0.71, 1.0, 1.0)
+# Text parameters longer than this many octets get a multi-line editor.
+_MULTILINE_TEXT_LENGTH = 255
+_MULTILINE_TEXT_ROWS = 6
 _ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
 
 
@@ -134,8 +137,14 @@ def render_param_widget(
                 changed, new_checked = imgui.checkbox(f"##{widget_id}", checked)
                 if changed:
                     on_change("1" if new_checked else "0")
-        case TextWidget():
-            _render_text_param(widget_id, param.value, on_change, differs)
+        case TextWidget() as w:
+            _render_text_param(
+                widget_id,
+                param.value,
+                on_change,
+                differs,
+                multiline=(w.max_length or 0) > _MULTILINE_TEXT_LENGTH,
+            )
         case PictureWidget():
             imgui.text_disabled(S.NODE_IMAGE_PLACEHOLDER)
         case _:
@@ -144,10 +153,21 @@ def render_param_widget(
 
 
 def _render_text_param(
-    widget_id: str, value: str, on_change: Callable[[str], None], differs: bool
+    widget_id: str,
+    value: str,
+    on_change: Callable[[str], None],
+    differs: bool,
+    *,
+    multiline: bool = False,
 ) -> None:
     if differs:
         _, new_value = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
+    elif multiline:
+        _, new_value = imgui.input_text_multiline(
+            f"##{widget_id}",
+            value,
+            imgui.ImVec2(-1, imgui.get_text_line_height() * _MULTILINE_TEXT_ROWS),
+        )
     else:
         _, new_value = imgui.input_text(f"##{widget_id}", value)
     if imgui.is_item_deactivated_after_edit() and (not differs or new_value):

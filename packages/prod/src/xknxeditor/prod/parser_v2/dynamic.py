@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
@@ -127,6 +128,9 @@ __all__ = [
 ]
 
 
+logger = logging.getLogger(__name__)
+
+
 class _AppNode(DynamicNode):
     """Top wrapper that seeds global param-ref defaults before the app tree evaluates."""
 
@@ -153,6 +157,7 @@ class DynamicTreeBuilder:
         # active, so it must not gate the capture chain (would wrongly disqualify every object under it).
         # This set is shared by reference into the Choose/Repeat nodes and is complete once _build ends.
         self._widget_param_refs: set[str] = set()
+        self._plugin_warned: set[str] = set()
         # Union members share the same memory offset; only one is the "active" overlay at a time.
         # Map each of a union member's parameter-refs to its union siblings' parameter-refs, so a
         # Choose on an inactive union member renders nothing (see ChooseWhenNode). Without this we
@@ -360,9 +365,13 @@ class DynamicTreeBuilder:
             assert pt is not None, (
                 f"ParameterType {param.parameter_type!r} not found in static"
             )
-            assert not pt.plugin, (
-                f"ParameterType {param.parameter_type!r} uses unsupported plugin {pt.plugin!r}"
-            )
+            if pt.plugin and pt.id not in self._plugin_warned:
+                self._plugin_warned.add(pt.id)
+                logger.warning(
+                    "ParameterType %s uses unsupported plugin %s; shown read-only",
+                    pt.id,
+                    pt.plugin,
+                )
             # Record this ref as widget-rendered so Choose/Repeat gates on it count toward activeness.
             self._widget_param_refs.add(elem.ref_id)
             return ParameterRefRefNode(elem, pr, param, pt)
