@@ -39,13 +39,13 @@ _DOTNET: dict[str, dict[str, str]] = {
         "de": 'Das Objekt des Typs "{0}" kann nicht in Typ "{1}" umgewandelt werden.',
         "nl": "Kan object van het type {0} niet converteren naar het type {1}.",
     },
-    # Observed; the first English line of "property_empty" is reworded.
+    # Observed; the program name in "property_empty" is this application's.
     "resource_not_available": {
         "en": "The selected device resource is currently not available.",
         "de": "Die ausgewählte Geräte-Ressource ist zurzeit nicht verfügbar.",
     },
     "property_empty": {
-        "en": "An attempt was made to read a protected or nonexistent memory area.\n"
+        "en": "XKNX Editor tried to read a protected or a non-existing memory block.\n"
         "Failed to read Property({0}/{1}, {2}, {3}): Empty response",
         "de": "Es wurde versucht, einen geschützten oder nicht vorhandenen Speicherbereich "
         "zu lesen.\nLesen von Property({0}/{1}, {2}, {3}) fehlgeschlagen: Empty response",
