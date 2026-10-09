@@ -2679,6 +2679,9 @@ def create_dockable_windows(app: KnxGuiApp) -> list[hello_imgui.DockableWindow]:
         window.label = f"{title}###{panel.name}"
         window.dock_space_name = panel.dock
         window.gui_function = panel.render
+        if panel.name == "editor":
+            # Parameter grids keep their declared column widths and may be wider than the panel.
+            window.imgui_window_flags = imgui.WindowFlags_.horizontal_scrollbar
         windows.append(window)
     rank = {name: i for i, name in enumerate(_DOCK_TAB_ORDER)}
     windows.sort(key=lambda w: rank.get(_dock_window_name(w), len(_DOCK_TAB_ORDER)))

@@ -10,6 +10,11 @@ from editor_gui.device import Device
 from editor_gui.widgets.dpi import px
 from editor_gui.widgets.float_format import format_float, parse_float
 from editor_gui.widgets.strings import S
+from editor_gui.widgets.value_pickers import (
+    format_date,
+    render_color_param,
+    render_date_param,
+)
 from xknxeditor.namespaces.intermediate.access_t import Access
 from xknxeditor.namespaces.intermediate.parameter_block_layout_t import (
     ParameterBlockLayout,
@@ -25,6 +30,8 @@ from xknxeditor.prod.parser_v2.ui import (
 )
 from xknxeditor.prod.parser_v2.ui.parameter import (
     CheckBoxWidget,
+    ColorWidget,
+    DateWidget,
     EnumWidget,
     FloatSliderWidget,
     FloatWidget,
@@ -116,16 +123,25 @@ def _track_help(help_context: str | None) -> None:
 
 def _default_display(param: UiParameter) -> str:
     """Human-readable default value (enum default resolved to its label)."""
+    return _value_display(param, param.default_value) or "-"
+
+
+def _value_display(param: UiParameter, value: str) -> str:
+    """``value`` as shown for ``param``: an enum value as its label, a float in its format."""
     if isinstance(param.widget, EnumWidget):
         for choice in param.widget.choices:
-            if str(choice.value) == param.default_value:
+            if str(choice.value) == value:
                 return choice.label
-    if (
-        isinstance(param.widget, FloatWidget | FloatSliderWidget)
-        and param.default_value
-    ):
-        return _float_display(param.widget, param.default_value)
-    return param.default_value or "-"
+    if isinstance(param.widget, FloatWidget | FloatSliderWidget) and value:
+        return _float_display(param.widget, value)
+    if isinstance(param.widget, DateWidget):
+        return format_date(value, param.widget.display_the_year)
+    return value
+
+
+def _shows_as_text(param: UiParameter) -> bool:
+    """A read-only parameter is shown as its value; a checkbox keeps its (disabled) box."""
+    return param.access == Access.READ and not isinstance(param.widget, CheckBoxWidget)
 
 
 @dataclass
@@ -175,6 +191,12 @@ def render_param_widget(
             )
         case FloatWidget() | FloatSliderWidget() as w:
             _render_float_param(widget_id, w, param.value, on_change, differs)
+        case ColorWidget():
+            render_color_param(widget_id, param.value, on_change, differs)
+        case DateWidget() as w:
+            render_date_param(
+                widget_id, param.value, w.display_the_year, on_change, differs
+            )
         case CheckBoxWidget():
             if differs:
                 _render_differs_text(widget_id, on_change)
@@ -759,18 +781,30 @@ def _render_grid_cells(
     declared_cols = max(max_col, len(block.column_headers), len(block.column_widths))
     total_cols = declared_cols + col_offset
     avail = imgui.get_content_region_avail().x
+    widths = [
+        _column_width(block.column_widths[col], avail)
+        if col < len(block.column_widths)
+        else None
+        for col in range(declared_cols)
+    ]
+    # Columns keep their declared widths, so a grid whose widths add up to more than the
+    # page extends past its right edge instead of squeezing the last columns.
+    stretch_cols = sum(w is None for w in widths) + col_offset
+    outer_width = max(
+        avail,
+        sum(w for w in widths if w is not None)
+        + stretch_cols * px(_MIN_STRETCH_COLUMN)
+        + 2 * imgui.get_style().cell_padding.x * total_cols,
+    )
 
-    if not imgui.begin_table(f"##grid_{prefix}", total_cols, table_flags):
+    if not imgui.begin_table(
+        f"##grid_{prefix}", total_cols, table_flags, imgui.ImVec2(outer_width, 0)
+    ):
         return None
     if has_row_labels:
         imgui.table_setup_column("", imgui.TableColumnFlags_.width_stretch, 1.0)
-    for col in range(declared_cols):
+    for col, width in enumerate(widths):
         header = block.column_headers[col] if col < len(block.column_headers) else ""
-        width = (
-            _column_width(block.column_widths[col], avail)
-            if col < len(block.column_widths)
-            else None
-        )
         if width is not None:
             imgui.table_setup_column(header, imgui.TableColumnFlags_.width_fixed, width)
         else:
@@ -810,14 +844,21 @@ def _render_grid_cells(
                     device, node, on_change, deferred_enum, differing_refs
                 )
             elif sep is not None:
-                if sep.hint is None and sep.text:
-                    imgui.text_disabled(sep.text)
-                else:
-                    _render_separator(sep)
+                _render_cell_separator(sep)
             if req is not None:
                 popup_request = req
     imgui.end_table()
     return popup_request
+
+
+def _render_cell_separator(sep: UiSeparator) -> None:
+    """A separator in a grid cell: a headline as plain text, a label dimmed, a ruler across."""
+    if sep.hint == "Headline" and sep.text:
+        imgui.text(sep.text)
+    elif sep.hint is None and sep.text:
+        imgui.text_disabled(sep.text)
+    else:
+        _render_separator(sep)
 
 
 def _render_grid_param(
@@ -827,7 +868,19 @@ def _render_grid_param(
     deferred_enum: bool,
     differing_refs: frozenset[str],
 ) -> EnumPopupRequest | None:
-    imgui.set_next_item_width(-1)
+    if _shows_as_text(param):
+        imgui.text(_value_display(param, param.value))
+        if param.suffix:
+            imgui.same_line()
+            imgui.text(param.suffix)
+        _track_help(param.help_context)
+        return None
+    suffix_width = (
+        imgui.calc_text_size(param.suffix).x + imgui.get_style().item_spacing.x
+        if param.suffix
+        else 0.0
+    )
+    imgui.set_next_item_width(-1 - suffix_width)
     widget_id = f"{device.node_id}_{param.ref_id}"
     # GRID/TABLE cells carry no label to tint, so mark a changed value by tinting
     # the widget's own text (combo preview / input), matching the table view.
@@ -846,6 +899,9 @@ def _render_grid_param(
     )
     imgui.end_disabled()
     _track_help(param.help_context)
+    if param.suffix:
+        imgui.same_line()
+        imgui.text(param.suffix)
     if changed:
         imgui.pop_style_color()
         if not read_only and imgui.begin_popup_context_item(f"##reset_{widget_id}"):
@@ -907,6 +963,10 @@ def _render_param_table(
             if indent > 0:
                 imgui.unindent(indent)
             imgui.table_set_column_index(1)
+            if _shows_as_text(param):
+                imgui.text(_value_display(param, param.value))
+                _track_help(param.help_context)
+                continue
             imgui.set_next_item_width(-1)
             widget_id = f"{device.node_id}_{param.ref_id}"
             read_only = param.access == Access.READ
@@ -937,6 +997,8 @@ def _render_param_table(
 
 
 _INFO_COLOR = imgui.ImVec4(0.45, 0.72, 1.0, 1.0)
+# Width at 100 % scaling a grid column without a declared width keeps when the grid is too wide.
+_MIN_STRETCH_COLUMN = 80.0
 _SEPARATOR_ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
 
 
