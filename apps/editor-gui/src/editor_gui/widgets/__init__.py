@@ -9,6 +9,7 @@ from editor_gui.widgets.parameter_widgets import (
     differing_param_refs,
     render_param_widget,
     render_ui_tree,
+    take_selected_help,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "differing_param_refs",
     "render_param_widget",
     "render_ui_tree",
+    "take_selected_help",
 ]

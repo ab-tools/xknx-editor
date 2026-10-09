@@ -24,11 +24,13 @@ from editor_gui.widgets import (
     count_parameters,
     differing_param_refs,
     render_ui_tree,
+    take_selected_help,
 )
 from editor_gui.widgets.group_objects_widgets import (
     GroupAddressCatalog,
     GroupLinkResolver,
 )
+from editor_gui.widgets.markdown import render_markdown
 from editor_gui.widgets.module_table import build_module_tables, render_module_tables
 
 _log = structlog.get_logger("configure")
@@ -89,12 +91,15 @@ class ConfigurePanel:
         on_paste_links: Callable[[int, list[tuple[int, bool]], bool], None]
         | None = None,
         buttons: ButtonActions | None = None,
+        get_help: Callable[[Device, str], str | None] | None = None,
     ) -> None:
         self._get_devices = get_devices
         self._get_selected_device = get_selected_device
         self._set_selected_device = set_selected_device
         self._on_param_change = on_param_change
         self._buttons = buttons
+        self._get_help = get_help
+        self._help: tuple[int, str] | None = None
         # "Multi fill": when on, a parameter edit is applied to every device that runs
         # the same application program, not just the selected one.
         self._on_param_change_all = on_param_change_all
@@ -340,6 +345,7 @@ class ConfigurePanel:
                         buttons=self._button_actions(multi=len(joint) > 1),
                     )
                     imgui.end_disabled()
+                    self._render_help(device)
                 else:
                     imgui.text_disabled(S.CONFIGURE_NO_DEVICES)
                 self._render_load_procedures(device)
@@ -683,6 +689,27 @@ class ConfigurePanel:
             state=lambda _d, _b: (False, None),
             error=buttons.error,
         )
+
+    def _render_help(self, device: Device) -> None:
+        selected = take_selected_help()
+        if selected is not None:
+            self._help = (device.node_id, selected)
+        if self._get_help is None or self._help is None:
+            return
+        node_id, context = self._help
+        if node_id != device.node_id:
+            return
+        text = self._get_help(device, context)
+        if not text:
+            return
+        imgui.separator_text(S.CONFIGURE_HELP)
+        if imgui.begin_child(
+            "##param_help",
+            imgui.ImVec2(0, imgui.get_text_line_height_with_spacing() * 12),
+            True,
+        ):
+            render_markdown(text)
+        imgui.end_child()
 
     def _dispatch_param(self, device: Device, ref_id: str, value: str) -> None:
         """Route a parameter edit: to the whole selected same-app subset (multi mode), to all

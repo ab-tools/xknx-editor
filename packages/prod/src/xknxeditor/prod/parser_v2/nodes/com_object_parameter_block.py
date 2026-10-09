@@ -74,5 +74,6 @@ class ComObjectParameterBlockNode(DynamicNode):
                 column_headers=column_headers,
                 read_only=self._elem.access == Access.READ,
                 hidden=self._elem.access == Access.NONE,
+                help_context=self._elem.help_context,
             )
         ]

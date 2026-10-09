@@ -62,5 +62,6 @@ class ParameterRefRefNode(DynamicNode):
                 icon=self._elem.icon,
                 cell=self._elem.cell,
                 text_alignment=self._param_type.text_alignment,
+                help_context=self._elem.help_context,
             )
         ]

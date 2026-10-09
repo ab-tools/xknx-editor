@@ -1766,5 +1766,9 @@ class ProjectStrings:
     def OPERATION_END(self) -> str:
         return _("End: {time}")
 
+    @property
+    def CONFIGURE_HELP(self) -> str:
+        return _("Help")
+
 
 S = ProjectStrings()

@@ -1185,3 +1185,6 @@ msgstr "Start: {time}"
 
 msgid "End: {time}"
 msgstr "Ende: {time}"
+
+msgid "Help"
+msgstr "Hilfe"
