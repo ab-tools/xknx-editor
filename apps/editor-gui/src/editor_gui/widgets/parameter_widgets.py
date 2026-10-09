@@ -8,6 +8,7 @@ from imgui_bundle import imgui
 
 from editor_gui.device import Device
 from editor_gui.widgets.dpi import px
+from editor_gui.widgets.float_format import format_float, parse_float
 from editor_gui.widgets.strings import S
 from xknxeditor.namespaces.intermediate.access_t import Access
 from xknxeditor.namespaces.intermediate.parameter_block_layout_t import (
@@ -25,6 +26,8 @@ from xknxeditor.prod.parser_v2.ui import (
 from xknxeditor.prod.parser_v2.ui.parameter import (
     CheckBoxWidget,
     EnumWidget,
+    FloatSliderWidget,
+    FloatWidget,
     NumberSliderWidget,
     NumberWidget,
     PictureWidget,
@@ -117,6 +120,11 @@ def _default_display(param: UiParameter) -> str:
         for choice in param.widget.choices:
             if str(choice.value) == param.default_value:
                 return choice.label
+    if (
+        isinstance(param.widget, FloatWidget | FloatSliderWidget)
+        and param.default_value
+    ):
+        return _float_display(param.widget, param.default_value)
     return param.default_value or "-"
 
 
@@ -165,6 +173,8 @@ def render_param_widget(
                 on_change,
                 differs,
             )
+        case FloatWidget() | FloatSliderWidget() as w:
+            _render_float_param(widget_id, w, param.value, on_change, differs)
         case CheckBoxWidget():
             if differs:
                 _render_differs_text(widget_id, on_change)
@@ -208,6 +218,34 @@ def _render_text_param(
         _, new_value = imgui.input_text(f"##{widget_id}", value)
     if imgui.is_item_deactivated_after_edit() and (not differs or new_value):
         on_change(new_value)
+
+
+def _float_display(widget: FloatWidget | FloatSliderWidget, value: str) -> str:
+    return format_float(
+        value, widget.display_format, widget.display_factor, widget.display_offset
+    )
+
+
+def _render_float_param(
+    widget_id: str,
+    widget: FloatWidget | FloatSliderWidget,
+    value: str,
+    on_change: Callable[[str], None],
+    differs: bool,
+) -> None:
+    """A float shown in its display format; an entry is stored when editing ends."""
+    shown = "" if differs else _float_display(widget, value)
+    if differs:
+        _, text = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
+    else:
+        _, text = imgui.input_text(f"##{widget_id}", shown)
+    if not imgui.is_item_deactivated_after_edit() or text == shown:
+        return
+    stored = parse_float(
+        text, widget.min, widget.max, widget.display_factor, widget.display_offset
+    )
+    if stored is not None:
+        on_change(stored)
 
 
 def _render_differs_text(widget_id: str, on_change: Callable[[str], None]) -> None:
