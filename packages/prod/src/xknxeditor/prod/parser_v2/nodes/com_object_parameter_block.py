@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from xknxeditor.namespaces.intermediate.access_t import Access
 from xknxeditor.namespaces.intermediate.application_program_channel_t import (
     ComObjectParameterBlock,
 )
@@ -71,5 +72,7 @@ class ComObjectParameterBlockNode(DynamicNode):
                 children=tuple(items),
                 row_labels=row_labels,
                 column_headers=column_headers,
+                read_only=self._elem.access == Access.READ,
+                hidden=self._elem.access == Access.NONE,
             )
         ]
