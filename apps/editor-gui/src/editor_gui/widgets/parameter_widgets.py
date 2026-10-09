@@ -8,7 +8,7 @@ from imgui_bundle import imgui
 
 from editor_gui.device import Device
 from editor_gui.widgets.dpi import px
-from editor_gui.widgets.float_format import format_float, parse_float
+from editor_gui.widgets.float_format import format_float, parse_float, step_float
 from editor_gui.widgets.strings import S
 from editor_gui.widgets.value_pickers import (
     format_date,
@@ -188,6 +188,7 @@ def render_param_widget(
                 w.max,
                 on_change,
                 differs,
+                w.increment,
             )
         case FloatWidget() | FloatSliderWidget() as w:
             _render_float_param(widget_id, w, param.value, on_change, differs)
@@ -257,17 +258,87 @@ def _render_float_param(
 ) -> None:
     """A float shown in its display format; an entry is stored when editing ends."""
     shown = "" if differs else _float_display(widget, value)
+    _set_spin_field_width()
     if differs:
         _, text = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
     else:
         _, text = imgui.input_text(f"##{widget_id}", shown)
-    if not imgui.is_item_deactivated_after_edit() or text == shown:
+    edited = imgui.is_item_deactivated_after_edit()
+    steps = _spin_buttons(widget_id, enabled=not differs)
+    if steps:
+        stepped = step_float(value, steps, widget.increment, widget.min, widget.max)
+        if stepped is not None and stepped != value:
+            on_change(stepped)
+        return
+    if not edited or text == shown:
         return
     stored = parse_float(
         text, widget.min, widget.max, widget.display_factor, widget.display_offset
     )
     if stored is not None:
         on_change(stored)
+
+
+def _spin_width() -> float:
+    return imgui.get_frame_height() * 0.7
+
+
+def _set_spin_field_width() -> None:
+    """Narrow the next field so the spin arrows fit within the requested width."""
+    imgui.set_next_item_width(
+        max(
+            px(30.0),
+            imgui.calc_item_width()
+            - _spin_width()
+            - imgui.get_style().item_inner_spacing.x,
+        )
+    )
+
+
+def _spin_buttons(widget_id: str, *, enabled: bool) -> int:
+    """Up/down arrows stacked beside the previous field: +1 or -1 while one is pressed."""
+    imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
+    height = imgui.get_frame_height()
+    size = imgui.ImVec2(_spin_width(), height / 2)
+    origin = imgui.get_cursor_screen_pos()
+    draw = imgui.get_window_draw_list()
+    style = imgui.get_style()
+    steps = 0
+    imgui.begin_group()
+    imgui.begin_disabled(not enabled)
+    imgui.push_item_flag(imgui.ItemFlags_.button_repeat, True)
+    for row, step in enumerate((1, -1)):
+        top = imgui.ImVec2(origin.x, origin.y + row * size.y)
+        imgui.set_cursor_screen_pos(top)
+        if imgui.invisible_button(f"##spin{row}_{widget_id}", size):
+            steps = step
+        color = (
+            imgui.Col_.button_active
+            if imgui.is_item_active()
+            else imgui.Col_.button_hovered
+            if imgui.is_item_hovered()
+            else imgui.Col_.frame_bg
+        )
+        draw.add_rect_filled(
+            top,
+            imgui.ImVec2(top.x + size.x, top.y + size.y),
+            imgui.get_color_u32(color),
+            style.frame_rounding,
+        )
+        mid_x = top.x + size.x / 2
+        half = min(size.x, size.y) * 0.3
+        tip = top.y + size.y / 2 + (-half if step > 0 else half) * 0.6
+        base = top.y + size.y / 2 + (half if step > 0 else -half) * 0.6
+        draw.add_triangle_filled(
+            imgui.ImVec2(mid_x, tip),
+            imgui.ImVec2(mid_x - half, base),
+            imgui.ImVec2(mid_x + half, base),
+            imgui.get_color_u32(imgui.Col_.text),
+        )
+    imgui.pop_item_flag()
+    imgui.end_disabled()
+    imgui.end_group()
+    return steps
 
 
 def _render_differs_text(widget_id: str, on_change: Callable[[str], None]) -> None:
@@ -288,19 +359,27 @@ def _render_int_param(
     max_value: int | None,
     on_change: Callable[[str], None],
     differs: bool = False,
+    increment: int = 1,
 ) -> None:
+    _set_spin_field_width()
     if differs:
         _, new_text = imgui.input_text_with_hint(
             f"##{widget_id}", S.PARAM_DIFFERS, "", imgui.InputTextFlags_.chars_decimal
         )
-        if not (imgui.is_item_deactivated_after_edit() and new_text):
-            return
+        edited = imgui.is_item_deactivated_after_edit() and bool(new_text)
     else:
         _, new_text = imgui.input_text(
             f"##{widget_id}", value, imgui.InputTextFlags_.chars_decimal
         )
-        if not imgui.is_item_deactivated_after_edit():
+        edited = imgui.is_item_deactivated_after_edit()
+    steps = _spin_buttons(widget_id, enabled=not differs)
+    if steps:
+        try:
+            new_text = str(int(value) + steps * (increment or 1))
+        except ValueError:
             return
+    elif not edited:
+        return
     try:
         clamped = int(new_text)
     except ValueError:

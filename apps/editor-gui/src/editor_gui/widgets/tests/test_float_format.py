@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from editor_gui.widgets.float_format import format_float, parse_float
+from editor_gui.widgets.float_format import format_float, parse_float, step_float
 
 
 @pytest.mark.parametrize(
@@ -64,3 +64,19 @@ def test_display_factor_and_offset() -> None:
 )
 def test_parse(text: str, stored: str | None) -> None:
     assert parse_float(text, minimum=-90, maximum=90) == stored
+
+
+@pytest.mark.parametrize(
+    ("stored", "steps", "increment", "result"),
+    [
+        ("50.1", 1, None, "51.1"),
+        ("0.1", 2, 0.1, "0.3"),
+        ("89.5", 1, None, "90"),
+        ("-89.5", -1, None, "-90"),
+        ("abc", 1, None, None),
+    ],
+)
+def test_step(
+    stored: str, steps: int, increment: float | None, result: str | None
+) -> None:
+    assert step_float(stored, steps, increment, -90, 90) == result

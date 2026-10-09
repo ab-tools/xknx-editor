@@ -61,6 +61,28 @@ def parse_float(
     return _general(value)
 
 
+def step_float(
+    stored: str,
+    steps: int,
+    increment: float | None = None,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> str | None:
+    """The stored value moved by ``steps`` increments, clamped to the range."""
+    try:
+        value = float(stored)
+    except ValueError:
+        return None
+    if not math.isfinite(value):
+        return None
+    value += steps * (increment or 1.0)
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return _general(value)
+
+
 def _general(value: float) -> str:
     text = format(value, ".15g").replace("e", "E")
     return "0" if text == "-0" else text
