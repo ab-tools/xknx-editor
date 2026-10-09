@@ -589,7 +589,7 @@ def _render_grid_block(
     """Lay out parameters positioned by their cell attribute into an imgui grid."""
     popup_request: EnumPopupRequest | None = None
     cells_by_pos: dict[tuple[int, int], UiParameter | UiButton] = {}
-    labels_by_pos: dict[tuple[int, int], str] = {}
+    labels_by_pos: dict[tuple[int, int], UiSeparator] = {}
     uncelled: list[UiParameter | UiButton] = []
 
     for node in block.children:
@@ -602,10 +602,10 @@ def _render_grid_block(
                 except ValueError:
                     pass
             uncelled.append(node)
-        elif isinstance(node, UiSeparator) and node.cell and node.text:
+        elif isinstance(node, UiSeparator) and node.cell:
             try:
                 r, c = node.cell.split(",")
-                labels_by_pos[(int(r), int(c))] = node.text
+                labels_by_pos[(int(r), int(c))] = node
             except ValueError:
                 pass
 
@@ -654,7 +654,7 @@ def _render_grid_block(
             for col in range(1, max_col + 1):
                 imgui.table_set_column_index(col - 1 + col_offset)
                 param = cells_by_pos.get((row, col))
-                label = labels_by_pos.get((row, col))
+                sep = labels_by_pos.get((row, col))
                 if isinstance(param, UiButton):
                     _render_button(device, param, prefix, buttons)
                 elif param is not None:
@@ -681,8 +681,11 @@ def _render_grid_block(
                             imgui.end_popup()
                     if req is not None:
                         popup_request = EnumPopupRequest(device=device, param=req.param)
-                elif label is not None:
-                    imgui.text_disabled(label)
+                elif sep is not None:
+                    if sep.hint is None and sep.text:
+                        imgui.text_disabled(sep.text)
+                    else:
+                        _render_separator(sep)
         imgui.end_table()
 
     if uncelled:
@@ -765,11 +768,41 @@ def _render_param_table(
     return popup_request
 
 
+_INFO_COLOR = imgui.ImVec4(0.45, 0.72, 1.0, 1.0)
+_SEPARATOR_ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
+
+
+def _aligned_text(
+    text: str, alignment: str | None, color: imgui.ImVec4 | None = None
+) -> None:
+    width = imgui.calc_text_size(text).x
+    avail = imgui.get_content_region_avail().x
+    if alignment in ("Center", "Right") and "\n" not in text and width < avail:
+        offset = (avail - width) / 2 if alignment == "Center" else avail - width
+        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + offset)
+    if color is not None:
+        imgui.push_style_color(imgui.Col_.text, color)
+    imgui.text_wrapped(text)
+    if color is not None:
+        imgui.pop_style_color()
+
+
 def _render_separator(sep: UiSeparator) -> None:
-    if sep.text:
-        imgui.separator_text(sep.text)
-    else:
+    if sep.hint == "HorizontalRuler":
+        if sep.text:
+            imgui.separator_text(sep.text)
+        else:
+            imgui.separator()
+    elif not sep.text:
         imgui.spacing()
+    elif sep.hint == "Headline":
+        imgui.separator_text(sep.text)
+    elif sep.hint == "Information":
+        _aligned_text(sep.text, sep.alignment, _INFO_COLOR)
+    elif sep.hint == "Error":
+        _aligned_text(sep.text, sep.alignment, _SEPARATOR_ERROR_COLOR)
+    else:
+        _aligned_text(sep.text, sep.alignment)
 
 
 class EnumPopup:
