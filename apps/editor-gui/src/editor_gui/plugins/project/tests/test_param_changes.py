@@ -12,7 +12,7 @@ from editor_gui.plugins.logger.service import LogService
 from editor_gui.plugins.project.service import ProjectService, _history_label
 from xknxeditor.prod import Application
 from xknxeditor.prod.application import parse_application_xml
-from xknxeditor.prod.script import CalculationError
+from xknxeditor.prod.script import CalculationError, ParameterValidationError
 
 APP = "M-00FA_A-0001-01-0000"
 
@@ -138,3 +138,19 @@ def test_labelled_composite_history() -> None:
     assert _history_label(
         "Composite", {"events": [], "label": "Button X executed."}
     ) == ("Button X executed.")
+
+
+def test_validation_rejects_edit_but_not_transfer(
+    proj: ProjectService, app: Application
+) -> None:
+    node_id = _add(proj, app)
+    device = proj.find_device_by_node_id(node_id)
+    assert device is not None
+    with pytest.raises(ParameterValidationError):
+        proj.set_param(device, _ref(3), "13")
+    assert device.param_errors[_ref(3)] == (
+        "Parameter value cannot be set, because validation failed."
+    )
+    assert _ref(3) not in _stored(proj, node_id)
+    assert proj._apply_params(node_id, [(_ref(3), "13")]) == 1
+    assert _stored(proj, node_id)[_ref(3)] == "13"

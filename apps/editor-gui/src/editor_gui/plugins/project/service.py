@@ -361,7 +361,6 @@ class ProjectService:
         # over-activated all channels and removed real objects; the scoped diff in
         # _reconcile_com_objects avoids that.)
         self._co_reconcile_enabled = True
-        self._param_errors: dict[tuple[int, str], str] = {}
 
     def set_logger(self, log: "Logger") -> None:
         self._log = log
@@ -1738,18 +1737,18 @@ class ProjectService:
             old=device.get_param_value(param_id),
             new=value,
         )
-        key = (device.node_id, param_id)
         try:
             self.edit_params(device, [(param_id, value)], mode="edit")
         except ValueError as exc:
-            self._param_errors[key] = str(exc)
+            device.param_errors[param_id] = str(exc)
             raise
-        self._param_errors.pop(key, None)
+        device.param_errors.pop(param_id, None)
         self._log_param_tree(device, param_id)
 
     def param_error(self, node_id: int, param_id: str) -> str | None:
         """The message of the last rejected edit of a parameter, until it is edited again."""
-        return self._param_errors.get((node_id, param_id))
+        device = self.find_device_by_node_id(node_id)
+        return None if device is None else device.param_errors.get(param_id)
 
     def edit_params(
         self,

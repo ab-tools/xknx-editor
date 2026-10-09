@@ -207,6 +207,10 @@ class Device:
     _dynamic_ui_dirty: bool = field(
         default=False, repr=False, compare=False, init=False
     )
+    # Message of the last rejected edit per parameter, shown until it is edited again.
+    param_errors: dict[str, str] = field(
+        default_factory=dict[str, str], repr=False, compare=False, init=False
+    )
 
     def __post_init__(self) -> None:
         self._ensure_dynamic_ui()

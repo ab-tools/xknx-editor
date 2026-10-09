@@ -20,6 +20,9 @@ from xknxeditor.namespaces.intermediate.parameter_calculation_t import (
     ParameterCalculation,
 )
 from xknxeditor.namespaces.intermediate.parameter_ref_t import ParameterRef
+from xknxeditor.namespaces.intermediate.parameter_validation_t import (
+    ParameterValidation,
+)
 from xknxeditor.namespaces.intermediate.segment_base_t import SegmentBase
 
 from .allocator import Allocator
@@ -32,6 +35,7 @@ class ApplicationIndexer:
         "_calc_sides",
         "_calculations",
         "_plans",
+        "_validations",
         "allocators",
         "app_allocators",
         "arg_alloc",
@@ -60,6 +64,7 @@ class ApplicationIndexer:
         self._calculations: dict[str, dict[str, list[ParameterCalculation]]] = {}
         self._calc_sides: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
         self._plans: dict[str, tuple[tuple[ParameterCalculation, str], ...]] = {}
+        self._validations: dict[str, list[ParameterValidation]] = {}
         self.ref_owner: dict[str, str | None] = {}
         self.refs_by_name: dict[str | None, dict[str, str]] = {}
         self.refs_by_number: dict[str | None, dict[int, str]] = {}
@@ -109,6 +114,8 @@ class ApplicationIndexer:
                 self.com_object_refs[cor.id] = cor
         if s.parameter_calculations is not None:
             self._index_calculations(s.parameter_calculations.parameter_calculation)
+        if s.parameter_validations is not None:
+            self._index_validations(s.parameter_validations.parameter_validation)
         if s.allocators is not None:
             self.app_allocators = {
                 a.id: Allocator(id=a.id, start=a.start, max_inclusive=a.max_inclusive)
@@ -252,6 +259,23 @@ class ApplicationIndexer:
     def calculations_for_r(self, ref_id: str) -> list[ParameterCalculation]:
         return self._calculations.get(ref_id, {}).get("r", [])
 
+    def _index_validations(self, validations: list[ParameterValidation]) -> None:
+        for v in validations:
+            for pr in v.parameters.parameter_ref_ref:
+                self._validations.setdefault(pr.ref_id, []).append(v)
+
+    def validations_for(self, ref_id: str) -> list[ParameterValidation]:
+        return self._validations.get(ref_id, [])
+
+    def type_error_text(self, ref_id: str) -> str | None:
+        """The message a ParameterType's ``ValidationErrorRef`` names for invalid values."""
+        pr = self.parameter_refs.get(ref_id)
+        base = self.parameters.get(pr.ref_id) if pr is not None else None
+        pt = self.parameter_types.get(base.parameter_type) if base is not None else None
+        ref = pt.validation_error_ref if pt is not None else None
+        msg = self.messages.get(ref) if ref else None
+        return msg.text if msg is not None else None
+
     def _index_calculations(self, calcs: list[ParameterCalculation]) -> None:
         for calc in calcs:
             for pr in calc.lparameters.parameter_ref_ref:
@@ -286,6 +310,10 @@ class ApplicationIndexer:
         if md.static.parameter_calculations is not None:
             self._index_calculations(
                 md.static.parameter_calculations.parameter_calculation
+            )
+        if md.static.parameter_validations is not None:
+            self._index_validations(
+                md.static.parameter_validations.parameter_validation
             )
         if md.static.allocators is not None:
             self.allocators[md.id] = {
