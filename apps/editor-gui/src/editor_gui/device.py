@@ -253,12 +253,14 @@ class Device:
         if self._dynamic_ui is None and self.app.program.dynamic is not None:
             from xknxeditor.prod.parser_v2.dynamic import DynamicUI as _DynamicUI
 
+            # Program and tree as one pair: an unused application may have been reloaded.
+            program, tree_builder = self.app.resolved()
             self._dynamic_ui = _DynamicUI(
-                self.app.program,
+                program,
                 parameter_instance_refs=self.parameter_instance_refs or None,
                 module_instances=self.module_instances or None,
                 com_object_instance_refs=self.com_object_instance_refs or None,
-                tree_builder=self.app.tree_builder(),
+                tree_builder=tree_builder,
             )
         return self._dynamic_ui
 
