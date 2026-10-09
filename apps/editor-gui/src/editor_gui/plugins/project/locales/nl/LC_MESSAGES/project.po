@@ -627,3 +627,6 @@ msgstr "Script reageert niet"
 
 msgid "Force stop"
 msgstr "Geforceerd stoppen"
+
+msgid "The script was stopped."
+msgstr "Het script is gestopt."

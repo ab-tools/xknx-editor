@@ -64,6 +64,38 @@ function checkRange(input, changed, value, context) {
 }
 function notThirteen(input, changed, value) { return value != 13; }
 function checkModule(input, changed, value) { return input.x &lt; 50 ? true : "x must be below 50"; }
+function offlineButton(device, online, progress, context) {
+  if (online !== null || progress !== null) { throw new Error("not offline"); }
+  var a = device.getParameterByName("A");
+  a.value = a.value + context.n;
+}
+function failingButton(device) {
+  device.getParameterByName("C").value = 7;
+  throw new Error("stop");
+}
+function undoButton(device) {
+  try {
+    device.withUndo("group", function () {
+      device.getParameterByName("C").value = 8;
+      throw new Error("inner");
+    });
+  } catch (e) {}
+  device.getParameterByName("D").value = 9;
+}
+function rejectButton(device) { device.getParameterByName("C").value = 13; }
+function catchButton(device) {
+  try { device.getParameterByName("C").value = 13; } catch (e) { Log.info(e.message); }
+  try { device.getParameterByName("Nope"); } catch (e) { Log.info(e.message); }
+}
+function moduleButton(device, online, progress, context) {
+  device.getParameterByName("X").value = context.ch * 10;
+}
+function infoButton(device) {
+  var p = device.getParameterById("P-1_R-1");
+  var q = device.getParameterByUniqueNumber(3);
+  Log.info(p.name + "|" + q.parameterRefId + "|" + p.isActive + "|" + device.getMessage(1) + "|" + device.ApplicationProgramName);
+}
+function loopButton(device) { while (true) {} }
 </Script>
           </Static>
           <ModuleDefs>

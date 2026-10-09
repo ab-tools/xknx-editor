@@ -1131,3 +1131,6 @@ msgstr "Skript reagiert nicht"
 
 msgid "Force stop"
 msgstr "Beenden erzwingen"
+
+msgid "The script was stopped."
+msgstr "Das Skript wurde gestoppt."

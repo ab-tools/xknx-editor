@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
 
+from editor_gui.device import Device
 from editor_gui.plugins.base import Logger
 from editor_gui.plugins.catalog.service import CatalogService
 from editor_gui.plugins.logger.service import LogService
+from editor_gui.plugins.project.button_runner import ButtonRunner
 from editor_gui.plugins.project.service import ProjectService, _history_label
 from xknxeditor.prod import Application
 from xknxeditor.prod.application import parse_application_xml
+from xknxeditor.prod.parser_v2.ui import UiButton
 from xknxeditor.prod.script import CalculationError, ParameterValidationError
 
 APP = "M-00FA_A-0001-01-0000"
@@ -154,3 +158,47 @@ def test_validation_rejects_edit_but_not_transfer(
     assert _ref(3) not in _stored(proj, node_id)
     assert proj._apply_params(node_id, [(_ref(3), "13")]) == 1
     assert _stored(proj, node_id)[_ref(3)] == "13"
+
+
+def _run_button(
+    proj: ProjectService, node_id: int, handler: str, params: str = ""
+) -> Device:
+    device = proj.find_device_by_node_id(node_id)
+    assert device is not None
+    runner = ButtonRunner(proj, Logger(LogService(), "project"))
+    button = UiButton(
+        id=f"{APP}_B-1", text="Run", handler=handler, handler_parameters=params or None
+    )
+    runner.start(device, button)
+    deadline = time.monotonic() + 10
+    while runner.busy and time.monotonic() < deadline:
+        time.sleep(0.01)
+        runner.poll()
+    assert not runner.busy
+    assert not device.script_running
+    return device
+
+
+def test_offline_button_is_one_labelled_undo_step(
+    proj: ProjectService, app: Application
+) -> None:
+    node_id = _add(proj, app)
+    _run_button(proj, node_id, "offlineButton", '{"n": 2}')
+    stored = _stored(proj, node_id)
+    assert (stored[_ref(1)], stored[_ref(2)]) == ("3", "7")
+    assert proj.history()[0].display_text == "Button Run executed."
+    assert proj.undo()
+    stored = _stored(proj, node_id)
+    assert _ref(1) not in stored and _ref(2) not in stored
+
+
+def test_failing_offline_button_changes_nothing(
+    proj: ProjectService, app: Application
+) -> None:
+    node_id = _add(proj, app)
+    entries = len(proj.history())
+    device = _run_button(proj, node_id, "failingButton")
+    assert device.param_errors[f"{APP}_B-1"] == "stop"
+    assert device.get_param_value(_ref(3)) == "3"
+    assert _ref(3) not in _stored(proj, node_id)
+    assert len(proj.history()) == entries

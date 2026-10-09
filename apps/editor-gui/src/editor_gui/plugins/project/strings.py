@@ -1702,5 +1702,9 @@ class ProjectStrings:
     def SCRIPT_FORCE_STOP(self) -> str:
         return _("Force stop")
 
+    @property
+    def SCRIPT_ABORTED(self) -> str:
+        return _("The script was stopped.")
+
 
 S = ProjectStrings()

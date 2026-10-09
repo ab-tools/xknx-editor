@@ -330,6 +330,7 @@ class ConfigurePanel:
                         _, self._apply_all_channels = imgui.checkbox(
                             S.CONFIGURE_APPLY_ALL_CHANNELS, self._apply_all_channels
                         )
+                    imgui.begin_disabled(device.script_running)
                     render_ui_tree(
                         device,
                         ui_nodes,
@@ -338,6 +339,7 @@ class ConfigurePanel:
                         differing_refs=differing,
                         buttons=self._button_actions(multi=len(joint) > 1),
                     )
+                    imgui.end_disabled()
                 else:
                     imgui.text_disabled(S.CONFIGURE_NO_DEVICES)
                 self._render_load_procedures(device)
