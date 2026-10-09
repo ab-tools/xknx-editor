@@ -56,6 +56,16 @@
     return decode(r.v);
   }
 
+  function method(f) {
+    defineProperty(f, "__xk_unknown", { value: true });
+    return f;
+  }
+
+  function methods(o) {
+    for (var k in o) if (hasOwn.call(o, k) && typeof o[k] === "function") method(o[k]);
+    return o;
+  }
+
   function param(ref) {
     if (ref === null || ref === undefined) return null;
     var p = {};
@@ -74,7 +84,10 @@
       getParameterByName: function (name) { return param(host("d.byName", scope, name)); },
       getParameterById: function (id) { return param(host("d.byId", scope, id)); },
       getParameterByUniqueNumber: function (n) { return param(host("d.byNumber", scope, n)); },
-      getMessage: function (id) { return host("d.message", id); },
+      getMessage: function (id) {
+        var m = host("d.message", id);
+        return m === null ? undefined : m;
+      },
       withUndo: function (description, fn) {
         host("d.undoBegin", description === undefined ? "" : String(description));
         try {
@@ -86,6 +99,7 @@
         host("d.undoCommit");
       }
     };
+    methods(d);
     defineProperty(d, "ApplicationProgramName", { get: function () { return host("d.appName"); } });
     return d;
   }
@@ -108,19 +122,19 @@
         };
       })(ONLINE[i]);
     }
-    return o;
+    return methods(o);
   }
 
   function progress() {
-    return {
+    return methods({
       setProgress: function (v) { host("g.progress", Number(v)); },
       setText: function (t) { host("g.text", t === undefined ? "" : String(t)); },
       isCanceled: function () { return host("g.canceled"); }
-    };
+    });
   }
 
   function logger(level) {
-    return function (msg) { host("log", level, msg === undefined || msg === null ? "" : String(msg)); };
+    return method(function (msg) { host("log", level, msg === undefined || msg === null ? "" : String(msg)); });
   }
 
   function resolve(a) {
@@ -128,6 +142,7 @@
       if (a.$host === "device") return device(a.scope);
       if (a.$host === "online") return online();
       if (a.$host === "progress") return progress();
+      if (a.$host === "undefined") return undefined;
       return null;
     }
     return decode(a);
@@ -148,14 +163,14 @@
 
   var api = {
     install: function (globalsSpec) {
-      var log = { error: logger("error"), warn: logger("warn"), info: logger("info"), Debug: logger("debug") };
+      var log = { error: logger("error"), warn: logger("warn"), info: logger("info"), Debug: logger("error") };
       g.Log = log;
       g.error = log.error;
       g.warn = log.warn;
       g.info = log.info;
       g.Debug = log.Debug;
       if (globalsSpec && globalsSpec.getMessage) {
-        g.getMessage = function (id) { return host("a.message", id); };
+        g.getMessage = method(function (id) { return host("a.message", id); });
       }
     },
     invoke: function (fn, args, readback) {

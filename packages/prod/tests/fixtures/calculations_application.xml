@@ -59,13 +59,13 @@ function boom(input, output) { throw new Error("bad"); }
 function plus100(input, output) { output.y = input.x + 100; }
 function label(input, output) { output.t = "n=" + input.a; }
 function checkRange(input, changed, value, context) {
-  if (input.a + input.b > context.max) { return changed + " too big: " + value; }
+  if (input.a + input.b > context.max) { return changed + " too big: " + input[changed] + " was " + value; }
   return true;
 }
-function notThirteen(input, changed, value) { return value != 13; }
+function notThirteen(input, changed, value) { return input.c != 13; }
 function checkModule(input, changed, value) { return input.x &lt; 50 ? true : "x must be below 50"; }
 function offlineButton(device, online, progress, context) {
-  if (online !== null || progress !== null) { throw new Error("not offline"); }
+  if (online !== undefined || progress !== undefined) { throw new Error("not offline"); }
   var a = device.getParameterByName("A");
   a.value = a.value + context.n;
 }

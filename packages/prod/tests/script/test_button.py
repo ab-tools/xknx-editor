@@ -16,6 +16,7 @@ from xknxeditor.prod.script.button import (
     run_button,
     run_offline_button,
 )
+from xknxeditor.prod.script.compat.runtime import JScriptEnv
 
 APP = "M-00FA_A-0001-01-0000"
 MI2 = f"{APP}_MD-1_M-2_MI-1"
@@ -41,6 +42,7 @@ def _button(handler: str, params: str | None = None, mi: str | None = None) -> U
 @pytest.fixture
 def ui() -> DynamicUI:
     dui = DynamicUI(parse_application_xml(XML, "M-00FA")[0].program)
+    dui.script_env = JScriptEnv(tz="Europe/Berlin", locale="en-US")
     dui.ui()
     return dui
 
@@ -78,7 +80,7 @@ def test_rejected_write_throws_into_the_script(ui: DynamicUI) -> None:
     )
     assert logs == [
         "Parameter value cannot be set, because validation failed.",
-        "Parameter 'Nope' not found.",
+        "The given key was not present in the dictionary.",
     ]
 
 

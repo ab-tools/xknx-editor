@@ -13,6 +13,7 @@ from editor_gui.plugins.catalog.service import CatalogService
 from editor_gui.plugins.logger.service import LogService
 from editor_gui.plugins.project.button_runner import ButtonRunner
 from editor_gui.plugins.project.service import ProjectService, _history_label
+from editor_gui.plugins.project.strings import S
 from xknxeditor.prod import Application
 from xknxeditor.prod.application import parse_application_xml
 from xknxeditor.prod.parser_v2.ui import UiButton
@@ -93,9 +94,7 @@ def test_rejected_edit_stores_nothing(proj: ProjectService, app: Application) ->
     assert device is not None
     with pytest.raises(CalculationError):
         proj.set_param(device, _ref(5), "9")
-    assert proj.param_error(node_id, _ref(5)) == (
-        "Scripting engine returned with error 'bad'."
-    )
+    assert proj.param_error(node_id, _ref(5)) == ("bad")
     assert _ref(5) not in _stored(proj, node_id)
     device = proj.find_device_by_node_id(node_id)
     assert device is not None
@@ -152,9 +151,8 @@ def test_validation_rejects_edit_but_not_transfer(
     assert device is not None
     with pytest.raises(ParameterValidationError):
         proj.set_param(device, _ref(3), "13")
-    assert device.param_errors[_ref(3)] == (
-        "Parameter value cannot be set, because validation failed."
-    )
+    assert device.param_errors[_ref(3)] == S.VALIDATION_FAILED
+    assert device.param_inputs[_ref(3)] == "13"
     assert _ref(3) not in _stored(proj, node_id)
     assert proj._apply_params(node_id, [(_ref(3), "13")]) == 1
     assert _stored(proj, node_id)[_ref(3)] == "13"
@@ -186,7 +184,7 @@ def test_offline_button_is_one_labelled_undo_step(
     _run_button(proj, node_id, "offlineButton", '{"n": 2}')
     stored = _stored(proj, node_id)
     assert (stored[_ref(1)], stored[_ref(2)]) == ("3", "7")
-    assert proj.history()[0].display_text == "Button Run executed."
+    assert proj.history()[0].display_text == S.BUTTON_EXECUTED.format("Run")
     assert proj.undo()
     stored = _stored(proj, node_id)
     assert _ref(1) not in stored and _ref(2) not in stored
@@ -202,3 +200,21 @@ def test_failing_offline_button_changes_nothing(
     assert device.get_param_value(_ref(3)) == "3"
     assert _ref(3) not in _stored(proj, node_id)
     assert len(proj.history()) == entries
+
+
+def test_rejected_input_is_submitted_again_after_other_edits(
+    proj: ProjectService, app: Application
+) -> None:
+    node_id = _add(proj, app)
+    device = proj.find_device_by_node_id(node_id)
+    assert device is not None
+    with pytest.raises(ParameterValidationError):
+        proj.set_param(device, _ref(1), "499")
+    assert device.param_inputs[_ref(1)] == "499"
+    proj.set_param(device, _ref(3), "4")
+    assert _ref(1) in device.param_inputs
+    proj.edit_params(device, [(_ref(2), "0"), (_ref(3), "0")], mode="raw")
+    proj.set_param(device, _ref(7), "K1")
+    assert _ref(1) not in device.param_inputs
+    assert _ref(1) not in device.param_errors
+    assert device.get_param_value(_ref(1)) == "499"

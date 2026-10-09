@@ -811,7 +811,8 @@ class DynamicUI:
             except ValueError as exc:
                 raise EncodingError(f"parameter {ref_id}: {exc}") from exc
 
-    def _text_encoding(self) -> str:
+    @property
+    def text_encoding(self) -> str:
         options = self._app.static.options
         encoding = options.text_parameter_encoding if options is not None else None
         return encoding.value if encoding is not None else "iso-8859-1"
@@ -861,7 +862,7 @@ class DynamicUI:
             raise ValueError(f"unknown parameter ref {ref_id!r}")
         if strict:
             try:
-                value = check_value(value, tc, text_encoding=self._text_encoding())
+                value = check_value(value, tc, text_encoding=self.text_encoding)
             except ValueError as exc:
                 text = self._idx.type_error_text(local)
                 raise ParameterValidationError(text or str(exc), ref_id=ref_id) from exc
@@ -901,7 +902,13 @@ class DynamicUI:
             v = scope.get(local_ref)
             return v if v is not None else self._idx.default_value(local_ref)
 
-        return CalculationScope(get=get, qualify=scope.qualify_local)
+        env = self.script_env
+        return CalculationScope(
+            get=get,
+            qualify=scope.qualify_local,
+            locale=env.locale if env is not None else None,
+            text_encoding=self.text_encoding,
+        )
 
     def recalculate(self, ref_ids: Iterable[str]) -> ChangeSet:
         """Run the calculation plans of ``ref_ids`` without changing them; errors are logged."""

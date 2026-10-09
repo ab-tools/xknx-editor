@@ -1295,7 +1295,31 @@
     defineProperty(g, gname, { value: GLOBALS[gname], writable: true, configurable: true, enumerable: false });
   }
   natives.set(JEnumerator, "Enumerator");
-  defineProperty(FP, "arguments", { value: null, writable: true, enumerable: false, configurable: true });
+  defineProperty(FP, "arguments", {
+    get: function () {
+      var s = this.__xk_as;
+      return s && s.length ? s[s.length - 1] : null;
+    },
+    set: function () {},
+    enumerable: false,
+    configurable: true
+  });
+
+  function argsEnter(args) {
+    var f = args.callee;
+    if (!hasOwn.call(f, "__xk_as")) defineProperty(f, "__xk_as", { value: [] });
+    f.__xk_as.push(args);
+    return f;
+  }
+
+  function argsExit(f) {
+    f.__xk_as.pop();
+  }
+
+  function typeOf(v) {
+    if (typeof v === "function" && v.__xk_unknown === true) return "unknown";
+    return typeof v;
+  }
   defineProperty(FP, "caller", { value: null, writable: true, enumerable: false, configurable: true });
   var JSCRIPT_VALUES = { __xk_undefined: undefined, __xk_NaN: NaN, __xk_Infinity: Infinity };
   for (var jv in JSCRIPT_VALUES) {
@@ -1366,6 +1390,7 @@
   }
 
   var api = {
+    tof: typeOf, ae: argsEnter, ax: argsExit,
     add: add, key: key, get: get, mth: mth, call: callMember, fcall: callFunction, tk: tick,
     fi: forInTarget, fiter: forInIterator, ctor: ctor, i: int64, dn: dropNames,
     ev: evalSource, re: literalRegex, err: function (e) {

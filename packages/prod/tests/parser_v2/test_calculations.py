@@ -85,7 +85,7 @@ def test_unset_outputs_are_kept(ui: DynamicUI) -> None:
 def test_script_error_rolls_back_the_edit(ui: DynamicUI) -> None:
     with pytest.raises(CalculationError) as err:
         ui.edit_parameter(_ref(5), "9")
-    assert str(err.value) == "Scripting engine returned with error 'bad'."
+    assert str(err.value) == "bad"
     assert ui.get_value(_ref(5)) == "5"
     changes = ui.set_parameter_ref(_ref(5), "9")
     assert changes[_ref(5)] == ("5", "9")

@@ -7,10 +7,15 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
-from .errors import COR_E_KEYNOTFOUND, HostError
+from .errors import (
+    CLASS_NOT_AUTOMATION,
+    COR_E_EXCEPTION,
+    COR_E_KEYNOTFOUND,
+    HostError,
+)
 from .sandbox import AbortToken, HostFunction, ScriptContext
-from .texts import PARAMETER_NOT_FOUND
-from .values import from_js, to_js
+from .texts import dotnet_text
+from .values import ScriptValueError, coerce_script_value, to_js
 
 if TYPE_CHECKING:
     from ..parser_v2.calculation import ChangeSet
@@ -66,10 +71,17 @@ class ParameterAccess:
             self._revert(self.changes)
             self.changes = {}
 
+    @property
+    def _locale(self) -> str | None:
+        env = self._ui.script_env
+        return env.locale if env is not None else None
+
     def _find(self, kind: str, scope: str | None, key: Any) -> str:
         ref = self._ui.find_parameter_ref(kind, key, scope)
         if ref is None:
-            raise HostError(PARAMETER_NOT_FOUND.format(key), number=COR_E_KEYNOTFOUND)
+            raise HostError(
+                dotnet_text("key_not_found", self._locale), number=COR_E_KEYNOTFOUND
+            )
         return ref
 
     def _get(self, ref: str) -> Any:
@@ -79,10 +91,17 @@ class ParameterAccess:
     def _set(self, ref: str, value: Any) -> None:
         local = self._ui.local_ref_id(ref)
         try:
-            text = from_js(value, self._ui.indexer.type_of(local))
+            text = coerce_script_value(
+                value,
+                self._ui.indexer.type_of(local),
+                locale=self._locale,
+                text_encoding=self._ui.text_encoding,
+            )
             changes = self._ui.write_parameter(ref, text)
+        except ScriptValueError as exc:
+            raise HostError(exc.message, number=exc.number) from exc
         except ValueError as exc:
-            raise HostError(str(exc)) from exc
+            raise HostError(str(exc), number=COR_E_EXCEPTION) from exc
         self._record(changes, None)
 
     def _undo_begin(self, description: str) -> None:
@@ -107,7 +126,13 @@ class ParameterAccess:
         return self._find("number", scope, number)
 
     def _message(self, key: Any) -> str | None:
-        return self._ui.indexer.message_text(key)
+        try:
+            number = int(float(str(key)))
+        except ValueError:
+            raise HostError(
+                "Class doesn't support Automation", number=CLASS_NOT_AUTOMATION
+            ) from None
+        return self._ui.indexer.message_text(number)
 
     def _app_name(self) -> str:
         return self._ui.application_name
@@ -164,10 +189,7 @@ def run_button(
     """Call the button's handler in a fresh script context."""
     if not button.handler:
         return
-    host: dict[str, HostFunction] = {
-        **access.host_functions(),
-        "a.message": ui.indexer.message_text,
-    }
+    host: dict[str, HostFunction] = dict(access.host_functions())
     host.update(online or {})
     host.update(progress or {})
     previous = ui.script_abort
@@ -175,7 +197,6 @@ def run_button(
     try:
         ctx = ScriptContext(
             script=ui.indexer.script or "",
-            get_message=True,
             host=host,
             abort=abort,
             on_log=on_log,
@@ -185,8 +206,8 @@ def run_button(
             button.handler,
             [
                 {"$host": "device", "scope": button.module_instance_id},
-                {"$host": "online"} if online is not None else None,
-                {"$host": "progress"} if progress is not None else None,
+                {"$host": "online" if online is not None else "undefined"},
+                {"$host": "progress" if progress is not None else "undefined"},
                 _context_object(button),
             ],
         )

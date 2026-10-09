@@ -242,6 +242,7 @@
     var counter = 0;
     var scopes = [];
     var fnmap = {};
+    var trackArguments = /\.\s*arguments(?![A-Za-z0-9_$])/.test(src);
     var withDepth = 0;
 
     function Scope() {
@@ -375,6 +376,9 @@
       var s = scopes.pop();
       var suf = suffix(s);
       if (suf) body = body.slice(0, -1) + ";" + suf + "}";
+      if (trackArguments) {
+        body = "{var __xk_af=__xk.ae(arguments);try{" + body.slice(1, -1) + "}finally{__xk.ax(__xk_af)}}";
+      }
       body = "{" + namePrefix(s) + body.slice(1);
       var text = head + body;
       var original = src.slice(node.start, node.end);
@@ -392,6 +396,14 @@
         cur().fnNames.push(node.id.name);
       }
       return "__xk.dn(" + text + ")";
+    }
+
+    function emitTypeof(node) {
+      var a = emit(node.argument);
+      if (node.argument.type === "Identifier") {
+        return "(typeof " + a + "===\"undefined\"?\"undefined\":__xk.tof(" + a + "))";
+      }
+      return "__xk.tof(" + a + ")";
     }
 
     function emitAdd(node) {
@@ -597,6 +609,7 @@
         case "UnaryExpression":
           if (node.operator === "delete") node.argument.__write = true;
           if (node.operator === "~") node.argument.__text = "__xk.i(" + emit(node.argument) + ")";
+          if (node.operator === "typeof") return emitTypeof(node);
           break;
         case "NewExpression":
           return emitNew(node);

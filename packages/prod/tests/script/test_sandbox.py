@@ -140,7 +140,7 @@ def test_log_globals() -> None:
         ("info", "b"),
         ("warn", "c"),
         ("error", "d"),
-        ("debug", "e"),
+        ("error", "e"),
     ]
 
 
