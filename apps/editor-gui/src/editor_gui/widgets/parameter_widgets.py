@@ -203,7 +203,7 @@ def render_param_widget(
                 _render_differs_text(widget_id, on_change)
             else:
                 checked = param.value == "1"
-                changed, new_checked = imgui.checkbox(f"##{widget_id}", checked)
+                changed, new_checked = _small_checkbox(f"##{widget_id}", checked)
                 if changed:
                     on_change("1" if new_checked else "0")
         case TextWidget() as w:
@@ -219,6 +219,17 @@ def render_param_widget(
         case _:
             _render_text_param(widget_id, param.value, on_change, differs)
     return None
+
+
+def _small_checkbox(label: str, checked: bool) -> tuple[bool, bool]:
+    """A checkbox about the size of the text, centred in a row of full-height fields."""
+    padding = imgui.get_style().frame_padding
+    small = padding.y / 4
+    imgui.set_cursor_pos_y(imgui.get_cursor_pos_y() + padding.y - small)
+    imgui.push_style_var(imgui.StyleVar_.frame_padding, imgui.ImVec2(padding.x, small))
+    result = imgui.checkbox(label, checked)
+    imgui.pop_style_var()
+    return result
 
 
 def _render_text_param(
