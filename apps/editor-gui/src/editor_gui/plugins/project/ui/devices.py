@@ -13,6 +13,16 @@ TreeDevice = Device | UnloadedDevice
 _UNLOADED_COLOR = imgui.ImVec4(0.95, 0.6, 0.25, 1.0)
 
 
+def _address_order(device: TreeDevice) -> tuple[int, int, int, int]:
+    """Numeric individual-address order (1.0.4 before 1.0.5 before 1.0.49); devices without a valid
+    address keep their creation order after the addressed ones."""
+    try:
+        area, line, number = (int(p) for p in device.individual_address.split("."))
+    except ValueError:
+        return (1 << 16, 0, 0, device.node_id)
+    return (area, line, number, device.node_id)
+
+
 @dataclass
 class Area:
     id: int
@@ -97,7 +107,7 @@ class DevicesPanel:
     def render(self) -> None:
         devices: list[TreeDevice] = sorted(
             [*self._get_devices(), *self._get_unloaded_devices()],
-            key=lambda d: d.node_id,
+            key=_address_order,
         )
         areas = self._get_areas()
         device_tree = self._build_device_tree(devices)

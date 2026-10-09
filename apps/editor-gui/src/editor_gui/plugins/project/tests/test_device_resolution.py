@@ -10,7 +10,8 @@ from editor_gui.device import Device, UnloadedDevice
 from editor_gui.plugins.base import Logger
 from editor_gui.plugins.catalog.service import CatalogService
 from editor_gui.plugins.logger.service import LogService
-from editor_gui.plugins.project.service import ProjectService
+from editor_gui.plugins.project.service import DeviceProduct, ProjectService
+from editor_gui.plugins.project.ui.devices import _address_order
 
 _APP_ID = "M-0008_A-7072-21-5CC3-O000A"
 
@@ -108,3 +109,50 @@ def test_display_name_prefers_product_name(tmp_path: Path) -> None:
     assert unnamed.display_name == "Product"
     assert bare.display_name == app.name
     assert UnloadedDevice(4, "", "Product", "1.1.4", None).display_name == "Product"
+
+
+def test_inserted_device_shows_its_product(tmp_path: Path) -> None:
+    cat = CatalogService(tmp_path / "c.xknxcatalog")
+    cat.import_knxprod(_fixture())
+    product = next(p for p in cat.get_products() if p.application_id == _APP_ID)
+    app = cat.get_application(_APP_ID)
+    assert app is not None and product.name
+    proj = ProjectService(cat)
+    proj.set_logger(Logger(LogService(), "project"))
+    proj.new(tmp_path / "p.xknx")
+    device_id = proj.add_device(
+        product.product_ref_id,
+        product.hardware2program_ref_id,
+        "",
+        app,
+        product=DeviceProduct.of(product),
+    )
+    assert device_id is not None
+    device = proj.find_device_by_node_id(device_id)
+    assert device is not None
+    assert (device.name, device.display_name) == ("", product.name)
+    info = proj.get_device_info(device_id)
+    assert info is not None
+    assert info.hardware_name == product.hardware_name
+    assert info.order_number == product.order_number
+
+    (copy_id,) = proj.clone_device(device_id)
+    copy = proj.find_device_by_node_id(copy_id)
+    assert copy is not None
+    assert (copy.name, copy.display_name) == ("", product.name)
+    proj.close()
+
+
+def test_tree_orders_devices_by_address() -> None:
+    def unloaded(node_id: int, address: str) -> UnloadedDevice:
+        return UnloadedDevice(node_id, "", "", address, None)
+
+    devices = [
+        unloaded(1, "1.0.49"),
+        unloaded(2, "1.0.5"),
+        unloaded(3, ""),
+        unloaded(4, "1.1.1"),
+        unloaded(5, "1.0.4"),
+    ]
+    ordered = sorted(devices, key=_address_order)
+    assert [d.node_id for d in ordered] == [5, 2, 1, 4, 3]

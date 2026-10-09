@@ -860,3 +860,43 @@ def test_multiple_concurrent_projects(tmp_path: Path):
     assert [d.id for d in svc.devices(a)] == [dev]
     assert svc.devices(b) == []  # isolated
     assert set(svc.list()) == {a, b}
+
+
+def test_add_device_stores_product_fields(tmp_path: Path):
+    svc, pid = _new(tmp_path)
+    seg = _backbone_segment(svc, pid)
+    dev = svc.add_device(
+        pid,
+        seg,
+        PRODUCT,
+        address=1,
+        product_name="Switch actuator",
+        hardware_name="SA 4-fold",
+        order_number="SA-04",
+        manufacturer_name="Acme",
+    )
+    svc.close(pid)
+    pid = svc.open(tmp_path / "p.xknx")
+    info = svc.device(pid, dev)
+    assert (info.name, info.product_name, info.hardware_name) == (
+        "",
+        "Switch actuator",
+        "SA 4-fold",
+    )
+    assert (info.order_number, info.manufacturer_name) == ("SA-04", "Acme")
+
+
+def test_add_device_event_without_product_fields_loads():
+    from xknxeditor.proj.core.events import AddDevice
+
+    event = AddDevice.from_dict(
+        {
+            "segment_id": 1,
+            "address": 2,
+            "name": "Old",
+            "product_ref_id": PRODUCT,
+            "hardware2program_ref_id": None,
+        }
+    )
+    assert event.product_name == ""
+    assert event.to_dict()["manufacturer_name"] == ""

@@ -307,6 +307,25 @@ class DeviceConfigClipboard:
     links: list[tuple[int, str, int, bool]]
 
 
+@dataclass(frozen=True)
+class DeviceProduct:
+    """Display fields of a device's product, stored on the device like an imported one has them."""
+
+    product_name: str = ""
+    hardware_name: str = ""
+    order_number: str = ""
+    manufacturer_name: str = ""
+
+    @classmethod
+    def of(cls, product: "ProductSummary") -> "DeviceProduct":
+        return cls(
+            product_name=product.name or "",
+            hardware_name=product.hardware_name or "",
+            order_number=product.order_number or "",
+            manufacturer_name=product.manufacturer_name or "",
+        )
+
+
 class ProjectService:
     def __init__(self, catalog: "CatalogService") -> None:
         self._catalog = catalog
@@ -1687,9 +1706,11 @@ class ProjectService:
         segment_id: int | None = None,
         address: int | None = None,
         parameters: list[tuple[str, str]] | None = None,
+        product: DeviceProduct | None = None,
     ) -> int | None:
         if self._pid is None:
             return None
+        product = product or DeviceProduct()
         if segment_id is None:
             segment_id = self._default_device_segment_id()
         if address is None:
@@ -1753,6 +1774,10 @@ class ProjectService:
             parameters=parameters or None,
             com_objects=com_objects,
             module_instances=module_instances if module_instances else None,
+            product_name=product.product_name,
+            hardware_name=product.hardware_name,
+            order_number=product.order_number,
+            manufacturer_name=product.manufacturer_name,
         )
         if hardware2program_ref_id is not None:
             self._app_cache[hardware2program_ref_id] = app
@@ -2109,9 +2134,15 @@ class ProjectService:
             new_id = self.add_device(
                 row.product_ref_id,
                 row.hardware2program_ref_id,
-                f"{row.name}{suffix}",
+                f"{row.name}{suffix}" if row.name else "",
                 app,
                 parameters=params,
+                product=DeviceProduct(
+                    product_name=row.product_name,
+                    hardware_name=row.hardware_name,
+                    order_number=row.order_number,
+                    manufacturer_name=row.manufacturer_name,
+                ),
             )
             if new_id is not None:
                 if source_links:

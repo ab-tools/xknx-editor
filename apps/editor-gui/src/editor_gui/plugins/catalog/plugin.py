@@ -10,6 +10,7 @@ from editor_gui.plugins.catalog.online_catalog import (
 )
 from editor_gui.plugins.catalog.strings import S
 from editor_gui.plugins.catalog.ui import CatalogPanel
+from editor_gui.plugins.project.service import DeviceProduct
 
 if TYPE_CHECKING:
     from editor_gui.plugins.catalog.online_catalog import OnlineCatalogItem
@@ -75,17 +76,20 @@ class CatalogPlugin:
             self._notify(S.CATALOG_ADD_NO_APP)
             return
 
+        # A new device has no name of its own; it shows its product's name until renamed.
         device_id = self._api.project.add_device(
             product_ref_id=product.product_ref_id,
             hardware2program_ref_id=product.hardware2program_ref_id,
-            name=app.name,
+            name="",
             app=app,
+            product=DeviceProduct.of(product),
         )
         if device_id:
             if space_id is not None:
                 self._api.project.set_device_space(device_id, space_id)
-            self._log.info("device added", name=app.name, id=device_id)
-            self._notify(S.CATALOG_ADD_OK.format(name=app.name))
+            label = product.name or app.name
+            self._log.info("device added", name=label, id=device_id)
+            self._notify(S.CATALOG_ADD_OK.format(name=label))
 
     def _space_options(self) -> list[tuple[int, str]]:
         """Flattened (space_id, "Building / Floor / Room") pairs for the Add-device room picker,

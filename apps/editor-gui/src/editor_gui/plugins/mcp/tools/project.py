@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from fastmcp.exceptions import ToolError
 
 from editor_gui.plugins.mcp.context import McpContext, make_tool, require_project
+from editor_gui.plugins.project.service import DeviceProduct
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -623,8 +624,9 @@ def register(mcp: FastMCP, ctx: McpContext) -> None:
             device_id = project.add_device(
                 product_ref_id=product.product_ref_id,
                 hardware2program_ref_id=product.hardware2program_ref_id,
-                name=name or product.name or app.name,
+                name=name or "",
                 app=app,
+                product=DeviceProduct.of(product),
             )
             if device_id is None:
                 raise ToolError("add_device did not return a device id")

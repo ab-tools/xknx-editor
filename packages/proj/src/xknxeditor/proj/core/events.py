@@ -264,6 +264,11 @@ class AddDevice(Event):
     com_objects: list[list[str | None]] = field(default_factory=list[list[str | None]])
     # [instance_id, ref_id] per row, e.g. ["M-100_MI-1", "M-100"]
     module_instances: list[list[str]] = field(default_factory=list[list[str]])
+    # Display fields of the product, as an imported device has them.
+    product_name: str = ""
+    hardware_name: str = ""
+    order_number: str = ""
+    manufacturer_name: str = ""
     device_id: int | None = None
     parameter_ids: list[int] = field(default_factory=list[int])
     com_object_ids: list[int] = field(default_factory=list[int])
@@ -276,6 +281,10 @@ class AddDevice(Event):
             name=self.name,
             product_ref_id=self.product_ref_id,
             hardware2program_ref_id=self.hardware2program_ref_id,
+            product_name=self.product_name,
+            hardware_name=self.hardware_name,
+            order_number=self.order_number,
+            manufacturer_name=self.manufacturer_name,
         )
         if self.device_id is not None:
             device.id = self.device_id
@@ -317,6 +326,10 @@ class AddDevice(Event):
             "parameters": self.parameters,
             "com_objects": self.com_objects,
             "module_instances": self.module_instances,
+            "product_name": self.product_name,
+            "hardware_name": self.hardware_name,
+            "order_number": self.order_number,
+            "manufacturer_name": self.manufacturer_name,
             "device_id": self.device_id,
             "parameter_ids": self.parameter_ids,
             "com_object_ids": self.com_object_ids,
