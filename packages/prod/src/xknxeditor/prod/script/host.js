@@ -7,6 +7,7 @@
   var ABORT = { aborted: true };
 
   function makeError(e) {
+    if (g.__xk) return g.__xk.hostError(e.message, e.number);
     var err = new Error(e.message);
     if (e.number !== undefined && e.number !== null) err.number = e.number;
     err.description = e.message;
@@ -133,6 +134,7 @@
   }
 
   function describe(e) {
+    if (g.__xk) e = g.__xk.norm(e);
     if (e !== null && typeof e === "object") {
       return {
         name: String(e.name),
@@ -175,7 +177,10 @@
       }
     },
     tick: function () { host("__tick"); },
-    isAbort: function (e) { return e === ABORT; }
+    isAbort: function (e) { return e === ABORT; },
+    host: host,
+    plain: plain,
+    abort: ABORT
   };
 
   defineProperty(g, "__xknx__", { value: api, enumerable: false, configurable: false, writable: false });

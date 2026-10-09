@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 from importlib import resources
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from dukpy.evaljs import JSInterpreter  # pyright: ignore[reportMissingTypeStubs]
 
@@ -18,6 +18,9 @@ from .errors import (
     ScriptCompileError,
     ScriptError,
 )
+
+if TYPE_CHECKING:
+    from .compat.runtime import JScriptEnv
 
 HostFunction = Callable[..., Any]
 
@@ -101,18 +104,29 @@ class ScriptContext:
         script: str | None = None,
         get_message: bool = False,
         on_log: Callable[[str, str], None] | None = None,
+        jscript: JScriptEnv | bool = True,
     ) -> None:
+        from .compat import runtime
+
         self._abort = abort or AbortToken()
         self._on_log = on_log
+        env = runtime.JScriptEnv() if jscript is True else jscript or None
+        self._jscript = env is not None
         self._interp: Any = _Interpreter()
         self._interp.export_function("__tick", self._wrap(self._tick))
         self._interp.export_function("log", self._wrap(self._log))
-        for name, fn in (host or {}).items():
+        functions: dict[str, HostFunction] = {}
+        if env is not None:
+            functions.update(runtime.host_functions(env))
+        functions.update(host or {})
+        for name, fn in functions.items():
             self._interp.export_function(name, self._wrap(fn))
         self._eval(host_prelude())
         self._eval(
             f"__xknx__.install({{getMessage: {'true' if get_message else 'false'}}});"
         )
+        if env is not None:
+            self._eval(runtime.prelude() + "\n;void 0;")
         for prelude in preludes:
             self._eval(prelude)
         if script:
@@ -123,7 +137,7 @@ class ScriptContext:
         return self._abort
 
     def _tick(self) -> None:
-        time.sleep(0)
+        time.sleep(0.0005)
 
     def _log(self, level: str, message: str) -> None:
         if self._on_log is not None:
@@ -149,6 +163,13 @@ class ScriptContext:
 
     def load(self, script: str) -> None:
         """Evaluate script text in the global scope."""
+        if self._jscript:
+            from .compat.frontend import transform
+
+            result = transform(script)
+            if result.fnmap:
+                self._eval("__xk.fnmap(dukpy.m)", m=result.fnmap)
+            script = result.code
         try:
             self._eval(script + "\n;void 0;")
         except Exception as exc:
