@@ -258,7 +258,12 @@ def _render_float_param(
 ) -> None:
     """A float shown in its display format; an entry is stored when editing ends."""
     shown = "" if differs else _float_display(widget, value)
-    _set_spin_field_width()
+    chars = max(
+        len(_float_display(widget, repr(widget.min))),
+        len(_float_display(widget, repr(widget.max))),
+        len(shown),
+    )
+    _set_spin_field_width(chars)
     if differs:
         _, text = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
     else:
@@ -280,55 +285,57 @@ def _render_float_param(
 
 
 def _spin_width() -> float:
-    return imgui.get_frame_height() * 0.7
+    return imgui.get_frame_height() * 0.6
 
 
-def _set_spin_field_width() -> None:
-    """Narrow the next field so the spin arrows fit within the requested width."""
-    imgui.set_next_item_width(
-        max(
-            px(30.0),
-            imgui.calc_item_width()
-            - _spin_width()
-            - imgui.get_style().item_inner_spacing.x,
-        )
+def _set_spin_field_width(chars: int) -> None:
+    """Size the next number field to ``chars`` characters plus its spin arrows, at most the
+    requested width; the arrows are drawn inside its right end."""
+    style = imgui.get_style()
+    content = (
+        imgui.calc_text_size("0" * max(chars, _MIN_NUMBER_CHARS)).x
+        + 2 * style.frame_padding.x
+        + _spin_width()
     )
+    imgui.set_next_item_width(min(imgui.calc_item_width(), content))
+    imgui.set_next_item_allow_overlap()
 
 
 def _spin_buttons(widget_id: str, *, enabled: bool) -> int:
-    """Up/down arrows stacked beside the previous field: +1 or -1 while one is pressed."""
-    imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
-    height = imgui.get_frame_height()
-    size = imgui.ImVec2(_spin_width(), height / 2)
-    origin = imgui.get_cursor_screen_pos()
+    """Up/down arrows inside the right end of the previous field: +1 or -1 while pressed."""
+    rect_min = imgui.get_item_rect_min()
+    rect_max = imgui.get_item_rect_max()
+    size = imgui.ImVec2(_spin_width(), (rect_max.y - rect_min.y) / 2)
+    left = rect_max.x - size.x
     draw = imgui.get_window_draw_list()
-    style = imgui.get_style()
+    rounding = imgui.get_style().frame_rounding
     steps = 0
+    imgui.set_cursor_screen_pos(imgui.ImVec2(left, rect_min.y))
     imgui.begin_group()
     imgui.begin_disabled(not enabled)
     imgui.push_item_flag(imgui.ItemFlags_.button_repeat, True)
     for row, step in enumerate((1, -1)):
-        top = imgui.ImVec2(origin.x, origin.y + row * size.y)
+        top = imgui.ImVec2(left, rect_min.y + row * size.y)
         imgui.set_cursor_screen_pos(top)
         if imgui.invisible_button(f"##spin{row}_{widget_id}", size):
             steps = step
-        color = (
-            imgui.Col_.button_active
-            if imgui.is_item_active()
-            else imgui.Col_.button_hovered
-            if imgui.is_item_hovered()
-            else imgui.Col_.frame_bg
-        )
-        draw.add_rect_filled(
-            top,
-            imgui.ImVec2(top.x + size.x, top.y + size.y),
-            imgui.get_color_u32(color),
-            style.frame_rounding,
-        )
+        if imgui.is_item_active() or imgui.is_item_hovered():
+            color = (
+                imgui.Col_.button_active
+                if imgui.is_item_active()
+                else imgui.Col_.button_hovered
+            )
+            draw.add_rect_filled(
+                top,
+                imgui.ImVec2(top.x + size.x, top.y + size.y),
+                imgui.get_color_u32(color),
+                rounding,
+            )
         mid_x = top.x + size.x / 2
-        half = min(size.x, size.y) * 0.3
-        tip = top.y + size.y / 2 + (-half if step > 0 else half) * 0.6
-        base = top.y + size.y / 2 + (half if step > 0 else -half) * 0.6
+        mid_y = top.y + size.y / 2
+        half = min(size.x, size.y) * 0.35
+        tip = mid_y - half * 0.6 * step
+        base = mid_y + half * 0.6 * step
         draw.add_triangle_filled(
             imgui.ImVec2(mid_x, tip),
             imgui.ImVec2(mid_x - half, base),
@@ -361,7 +368,8 @@ def _render_int_param(
     differs: bool = False,
     increment: int = 1,
 ) -> None:
-    _set_spin_field_width()
+    chars = max(len(str(min_value or 0)), len(str(max_value or 0)), len(value))
+    _set_spin_field_width(chars)
     if differs:
         _, new_text = imgui.input_text_with_hint(
             f"##{widget_id}", S.PARAM_DIFFERS, "", imgui.InputTextFlags_.chars_decimal
@@ -860,8 +868,10 @@ def _render_grid_cells(
     declared_cols = max(max_col, len(block.column_headers), len(block.column_widths))
     total_cols = declared_cols + col_offset
     avail = imgui.get_content_region_avail().x
+    # Percentage widths refer to the same page width on every grid, so grids line up.
+    reference = min(avail, px(_GRID_REFERENCE_WIDTH))
     widths = [
-        _column_width(block.column_widths[col], avail)
+        _column_width(block.column_widths[col], reference)
         if col < len(block.column_widths)
         else None
         for col in range(declared_cols)
@@ -876,9 +886,15 @@ def _render_grid_cells(
         + 2 * imgui.get_style().cell_padding.x * total_cols,
     )
 
-    if not imgui.begin_table(
+    padding = imgui.get_style().cell_padding
+    imgui.push_style_var(
+        imgui.StyleVar_.cell_padding, imgui.ImVec2(padding.x, padding.y / 4)
+    )
+    opened = imgui.begin_table(
         f"##grid_{prefix}", total_cols, table_flags, imgui.ImVec2(outer_width, 0)
-    ):
+    )
+    imgui.pop_style_var()
+    if not opened:
         return None
     if has_row_labels:
         imgui.table_setup_column("", imgui.TableColumnFlags_.width_stretch, 1.0)
@@ -1078,6 +1094,10 @@ def _render_param_table(
 _INFO_COLOR = imgui.ImVec4(0.45, 0.72, 1.0, 1.0)
 # Width at 100 % scaling a grid column without a declared width keeps when the grid is too wide.
 _MIN_STRETCH_COLUMN = 80.0
+# Page width at 100 % scaling that percentage column widths of a grid refer to.
+_GRID_REFERENCE_WIDTH = 540.0
+# Characters a number field has room for at least.
+_MIN_NUMBER_CHARS = 3
 _SEPARATOR_ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
 
 
