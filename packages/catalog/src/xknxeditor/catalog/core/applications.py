@@ -70,8 +70,7 @@ def get_application_xml(db: Session, program_id: str) -> tuple[bytes, str] | Non
     manufacturer_id = program.hardware.manufacturer_id
     archive = Archive(program.knxprod_path)
     with archive:
-        app_xmls = archive.get_application_xmls(manufacturer_id)
-        xml_bytes = app_xmls.get(program.application_id)
+        xml_bytes = archive.get_application_xml(manufacturer_id, program.application_id)
         if xml_bytes is None:
             return None
         return xml_bytes, manufacturer_id
@@ -103,8 +102,7 @@ def get_application_detail(
     manufacturer_id = program.hardware.manufacturer_id
     archive = Archive(program.knxprod_path)
     with archive:
-        app_xmls = archive.get_application_xmls(manufacturer_id)
-        xml_bytes = app_xmls.get(program.application_id)
+        xml_bytes = archive.get_application_xml(manufacturer_id, program.application_id)
         if xml_bytes is None:
             return None
         apps = parse_application_xml(
