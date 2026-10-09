@@ -11,8 +11,11 @@ from collections.abc import Callable
 
 from imgui_bundle import imgui
 
-from editor_gui.plugins.project.program_queue import QueueItem
+from editor_gui.plugins.project.program_queue import QueueItem, ScriptRun
 from editor_gui.plugins.project.strings import S
+
+# Seconds a script may ignore Cancel before Force stop is offered.
+FORCE_STOP_AFTER = 10.0
 
 
 class ProgramQueuePanel:
@@ -24,12 +27,14 @@ class ProgramQueuePanel:
         get_progress: Callable[[], tuple[int, int] | None],
         on_cancel: Callable[[int], None],
         on_clear: Callable[[], None],
+        on_cancel_current: Callable[[], None] | None = None,
     ) -> None:
         self._get_current = get_current
         self._get_queued = get_queued
         self._get_progress = get_progress
         self._on_cancel = on_cancel
         self._on_clear = on_clear
+        self._on_cancel_current = on_cancel_current
 
     def render(self) -> None:
         vp = imgui.get_main_viewport()
@@ -55,7 +60,9 @@ class ProgramQueuePanel:
             return
 
         current = self._get_current()
-        if current is not None:
+        if current is not None and current.script is not None:
+            self._render_script(current, current.script)
+        elif current is not None:
             progress = self._get_progress()
             frac = (
                 progress[0] / progress[1]
@@ -64,7 +71,7 @@ class ProgramQueuePanel:
             )
             imgui.text_colored(
                 imgui.ImVec4(0.3, 0.8, 0.4, 1.0),
-                f"> {current.address}  {current.name}  [{current.scope.name}]",
+                f"> {current.address}  {current.name}  [{_scope_label(current)}]",
             )
             if frac is not None:
                 imgui.same_line()
@@ -74,7 +81,7 @@ class ProgramQueuePanel:
         for pos, item in enumerate(queued, start=1):
             imgui.push_id(item.node_id)
             imgui.text_disabled(
-                f"{pos}.  {item.address}  {item.name}  [{item.scope.name}]  "
+                f"{pos}.  {item.address}  {item.name}  [{_scope_label(item)}]  "
                 f"{S.PROGRAM_QUEUE_QUEUED}"
             )
             imgui.same_line()
@@ -87,3 +94,28 @@ class ProgramQueuePanel:
             if imgui.button(S.PROGRAM_QUEUE_CLEAR):
                 self._on_clear()
         imgui.end()
+
+    def _render_script(self, item: QueueItem, run: ScriptRun) -> None:
+        imgui.text_colored(
+            imgui.ImVec4(0.3, 0.8, 0.4, 1.0),
+            f"> {item.address}  {item.name}  [{S.SCRIPT_OPERATION}]",
+        )
+        imgui.text(run.text or S.SCRIPT_RUNNING)
+        if run.progress is not None:
+            frac = min(max(run.progress / 100.0, 0.0), 1.0)
+            imgui.progress_bar(frac, imgui.ImVec2(240.0, 0.0))
+        if not run.canceled:
+            if self._on_cancel_current is not None and imgui.button(
+                f"{S.SCRIPT_CANCEL}##script_cancel"
+            ):
+                self._on_cancel_current()
+            return
+        imgui.text_disabled(S.SCRIPT_CANCELING)
+        if run.ignored_cancel_for() >= FORCE_STOP_AFTER:
+            imgui.same_line()
+            if imgui.button(f"{S.SCRIPT_FORCE_STOP}##script_force_stop"):
+                run.abort.request()
+
+
+def _scope_label(item: QueueItem) -> str:
+    return item.scope.name if item.scope is not None else S.SCRIPT_OPERATION

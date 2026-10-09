@@ -8,7 +8,6 @@ the partial download procedure (section 3.5.3).
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
@@ -23,6 +22,7 @@ from .merge import mask_authorize_levels, resolve_download_controls
 from .procedure import LoadProcedureRunner
 from .programmer import MAX_NEGOTIATED_APDU_LENGTH
 from .scope import DownloadScope, mask_object_types
+from .session import apdu_overhead, management_session
 
 logger = logging.getLogger(__name__)
 
@@ -35,31 +35,8 @@ if TYPE_CHECKING:
     from .data_secure import DeviceSecurity
     from .image import DownloadImage, GroupCommunication
     from .preflight import PreflightReport
-    from .programmer import BusConnection, ConnectionManager
+    from .programmer import ConnectionManager
     from .project_data import SeedDevice
-
-
-class _XknxConnectionManager:
-    """Open/close point-to-point connections to one device via ``xknx``."""
-
-    def __init__(self, xknx: XKNX, address: IndividualAddress) -> None:
-        """Initialize for a target individual address."""
-        self._xknx = xknx
-        self._address = address
-        self._connection: BusConnection | None = None
-
-    async def open(self) -> BusConnection:
-        """Open a fresh connection to the device."""
-        self._connection = await self._xknx.management.connect(self._address)
-        return self._connection
-
-    async def close(self) -> None:
-        """Close the current connection, tolerating a peer that already dropped it."""
-        if self._connection is None:
-            return
-        self._connection = None
-        with contextlib.suppress(ManagementConnectionError):
-            await self._xknx.management.disconnect(self._address)
 
 
 def _apdu_settings(max_apdu_length: int | None) -> tuple[int, bool]:
@@ -73,17 +50,7 @@ def _connection_manager(
     xknx: XKNX, address: IndividualAddress, security: DeviceSecurity | None
 ) -> ConnectionManager:
     """Return a plain or a Tool-Key secured connection manager for ``address``."""
-    if security is None:
-        return _XknxConnectionManager(xknx, address)
-    from .data_secure import SecureProgrammingError
-    from .secure_session import SecureConnectionManager
-
-    if security.address != address:
-        raise SecureProgrammingError(
-            f"security material is for {security.address}, not the download "
-            f"target {address}"
-        )
-    return SecureConnectionManager(xknx, address, security)
+    return management_session(xknx, address, security)
 
 
 def _resolve_controls(
@@ -118,11 +85,7 @@ def _object_types(
 
 def _apdu_overhead(security: DeviceSecurity | None) -> int:
     """Wire APDU overhead a secure session adds around each plaintext APDU."""
-    if security is None:
-        return 0
-    from .data_secure import SECURE_APDU_OVERHEAD
-
-    return SECURE_APDU_OVERHEAD
+    return apdu_overhead(security)
 
 
 def _authorize_levels(

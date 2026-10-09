@@ -96,6 +96,16 @@ function infoButton(device) {
   Log.info(p.name + "|" + q.parameterRefId + "|" + p.isActive + "|" + device.getMessage(1) + "|" + device.ApplicationProgramName);
 }
 function loopButton(device) { while (true) {} }
+function onlineButton(device, online, progress, context) {
+  progress.setText("step");
+  progress.setProgress(50);
+  online.connect();
+  var r = online.invokeFunctionProperty(160, 3, [1, 2]);
+  device.getParameterByName("C").value = r[0] + r.length + 7;
+  device.getParameterByName("D").value = 20;
+  online.disconnect();
+  throw new Error("late");
+}
 </Script>
           </Static>
           <ModuleDefs>

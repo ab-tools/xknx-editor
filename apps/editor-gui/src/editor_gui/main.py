@@ -2117,7 +2117,7 @@ class KnxGuiApp:
         if busy is None:
             return
         kind, address = busy
-        if kind == "program" and suppress_program:
+        if kind == "script" or (kind == "program" and suppress_program):
             return  # the programming-queue window shows this op's progress instead
         label = (
             S.STATUS_PROGRAMMING.format(address=address)

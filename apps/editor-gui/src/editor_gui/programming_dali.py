@@ -19,10 +19,7 @@ from xknxeditor.download import DeviceProgrammer, DeviceSecurity
 
 # Reuse the download package's own connection builders (plain or Tool-Key secured) so a DALI session
 # gets the same secure handling as a normal download. Repo-internal; intentional cross-module use.
-from xknxeditor.download.download import (
-    _apdu_overhead,  # pyright: ignore[reportPrivateUsage]
-    _connection_manager,  # pyright: ignore[reportPrivateUsage]
-)
+from xknxeditor.download.session import apdu_overhead, management_session
 
 # MDT DALI Control gateway application-id prefixes (manufacturer M-0083; 1x64 / 2x64 + presence
 # variants). Matched as a prefix of the full ``Application.id`` (e.g. "M-0083_A-0154-40-0F69-O00EF").
@@ -46,12 +43,10 @@ async def run_dali_operation[T](
     ``security`` (from the keyring) enables a Tool-Key secured session, matching the download flows.
     """
     target = IndividualAddress(address)
-    manager = _connection_manager(xknx, target, security)
+    manager = management_session(xknx, target, security)
     connection = await manager.open()
     try:
-        programmer = DeviceProgrammer(
-            connection, apdu_overhead=_apdu_overhead(security)
-        )
+        programmer = DeviceProgrammer(connection, apdu_overhead=apdu_overhead(security))
         # Negotiate the device's real APDU length (defaults to the mandatory 15). Multi-byte DALI
         # property writes (and a secure session's overhead) would not fit the 15-octet default.
         programmer.max_apdu_length = await programmer.read_max_apdu_length()

@@ -1134,3 +1134,9 @@ msgstr "Beenden erzwingen"
 
 msgid "The script was stopped."
 msgstr "Das Skript wurde gestoppt."
+
+msgid "Canceling…"
+msgstr "Wird abgebrochen…"
+
+msgid "No connection to the bus."
+msgstr "Keine Verbindung zum Bus."

@@ -630,3 +630,9 @@ msgstr "Geforceerd stoppen"
 
 msgid "The script was stopped."
 msgstr "Het script is gestopt."
+
+msgid "Canceling…"
+msgstr "Wordt geannuleerd…"
+
+msgid "No connection to the bus."
+msgstr "Geen verbinding met de bus."
