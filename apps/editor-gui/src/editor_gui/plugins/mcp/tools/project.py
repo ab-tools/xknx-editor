@@ -135,10 +135,23 @@ def _ui_node(node: Any) -> dict[str, Any]:
 
     Parameters carry the full _parameter_dict; groups carry their heading and children; separators are
     dropped. Lets a caller see which parameters belong to a channel / button pair / level."""
-    from xknxeditor.prod.parser_v2.ui import UiParameter, UiParameterBlock, UiTab
+    from xknxeditor.prod.parser_v2.ui import (
+        UiButton,
+        UiParameter,
+        UiParameterBlock,
+        UiTab,
+    )
 
     if isinstance(node, UiParameter):
         return {"kind": "parameter", **_parameter_dict(node)}
+    if isinstance(node, UiButton):
+        return {
+            "kind": "button",
+            "id": node.id,
+            "text": node.text,
+            "online": node.online,
+            "read_only": node.read_only,
+        }
     if isinstance(node, (UiTab, UiParameterBlock)):
         heading = getattr(node, "text", None) or getattr(node, "name", None)
         children = [

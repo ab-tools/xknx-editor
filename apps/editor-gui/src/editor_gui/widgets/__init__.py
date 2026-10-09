@@ -1,6 +1,7 @@
 from editor_gui.widgets.group_objects_widgets import GroupObjectsTable
 from editor_gui.widgets.hex_view import HexView
 from editor_gui.widgets.parameter_widgets import (
+    ButtonActions,
     EnumPopup,
     EnumPopupRequest,
     channel_apply_targets,
@@ -11,6 +12,7 @@ from editor_gui.widgets.parameter_widgets import (
 )
 
 __all__ = [
+    "ButtonActions",
     "EnumPopup",
     "EnumPopupRequest",
     "GroupObjectsTable",

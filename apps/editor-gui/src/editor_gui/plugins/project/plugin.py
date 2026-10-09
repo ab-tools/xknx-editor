@@ -25,6 +25,7 @@ from editor_gui.plugins.project.ui.memory_preview import MemoryPreviewWindow
 from editor_gui.plugins.project.ui.preflight_result import PreflightResultWindow
 from editor_gui.plugins.project.ui.program_queue import ProgramQueuePanel
 from editor_gui.plugins.project.ui.tools import apply_name_swap, shifted_ia
+from editor_gui.widgets import ButtonActions
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from editor_gui.programming import DeviceOverview
     from xknxeditor.download.image import GroupCommunication
     from xknxeditor.download.scope import DownloadScope
+    from xknxeditor.prod.parser_v2.ui import UiButton
 
 
 # Which commissioning "loaded" flags a successful download of each scope sets (keyed by
@@ -155,6 +157,11 @@ class ProjectPlugin:
             render_dali=self._render_dali_tab,
             on_navigate_ga=self._navigate_to_group_address,
             on_paste_links=self._paste_com_object_links,
+            buttons=ButtonActions(
+                on_click=self._handle_button,
+                state=self._button_state,
+                error=lambda device, button: device.param_errors.get(button.id),
+            ),
         )
         self._dali_panel = DaliCommissioningPanel(self._run_dali)
 
@@ -1028,6 +1035,20 @@ class ProjectPlugin:
                 param=param_id,
                 error=str(exc),
             )
+
+    def _handle_button(self, device: "Device", button: "UiButton") -> None:
+        self._api.log.info(
+            "button clicked", plugin="project", button=button.id, handler=button.handler
+        )
+
+    def _button_state(
+        self, device: "Device", button: "UiButton"
+    ) -> tuple[bool, str | None]:
+        if button.online is not None:
+            info = self._api.project.get_device_info(device.node_id)
+            if info is None or not info.individual_address_loaded:
+                return False, S.BUTTON_NEEDS_ADDRESS_LOADED
+        return True, None
 
     def _handle_param_change_all(
         self, device: "Device", param_id: str, new_value: str

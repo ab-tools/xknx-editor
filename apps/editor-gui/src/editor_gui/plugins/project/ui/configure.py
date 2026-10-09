@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from xknxeditor.proj.core.service import DeviceInfo
 from editor_gui.programming_dali import is_mdt_dali_app
 from editor_gui.widgets import (
+    ButtonActions,
     GroupObjectsTable,
     channel_apply_targets,
     count_parameters,
@@ -87,11 +88,13 @@ class ConfigurePanel:
         on_navigate_ga: Callable[[int], None] | None = None,
         on_paste_links: Callable[[int, list[tuple[int, bool]], bool], None]
         | None = None,
+        buttons: ButtonActions | None = None,
     ) -> None:
         self._get_devices = get_devices
         self._get_selected_device = get_selected_device
         self._set_selected_device = set_selected_device
         self._on_param_change = on_param_change
+        self._buttons = buttons
         # "Multi fill": when on, a parameter edit is applied to every device that runs
         # the same application program, not just the selected one.
         self._on_param_change_all = on_param_change_all
@@ -333,6 +336,7 @@ class ConfigurePanel:
                         self._dispatch_param,
                         filter_text=self._param_filter,
                         differing_refs=differing,
+                        buttons=self._button_actions(multi=len(joint) > 1),
                     )
                 else:
                     imgui.text_disabled(S.CONFIGURE_NO_DEVICES)
@@ -666,6 +670,17 @@ class ConfigurePanel:
             self._diff_selection = key
             self._diff_refs = differing_param_refs(joint)
         return self._diff_refs
+
+    def _button_actions(self, *, multi: bool) -> ButtonActions | None:
+        """Buttons act on one device only, so they are disabled in a multi-device edit."""
+        buttons = self._buttons
+        if buttons is None or not multi:
+            return buttons
+        return ButtonActions(
+            on_click=buttons.on_click,
+            state=lambda _d, _b: (False, None),
+            error=buttons.error,
+        )
 
     def _dispatch_param(self, device: Device, ref_id: str, value: str) -> None:
         """Route a parameter edit: to the whole selected same-app subset (multi mode), to all
