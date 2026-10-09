@@ -8,7 +8,9 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from typing import TYPE_CHECKING, Any, cast
 
 from xknxeditor.prod.script.errors import (
+    COR_E_EXCEPTION,
     COR_E_INVALIDOPERATION,
+    E_NOINTERFACE,
     E_NOTIMPL,
     E_POINTER,
     AbortRequested,
@@ -19,6 +21,7 @@ from xknxeditor.prod.script.texts import COAP_NOT_SUPPORTED, NOT_CONNECTED, dotn
 from .programmer import (
     DEFAULT_MAX_APDU_LENGTH,
     MAX_COMMUNICATION_APDU_LENGTH,
+    PID_OBJECT_TYPE,
     DeviceProgrammer,
 )
 from .session import apdu_overhead, management_session
@@ -52,6 +55,7 @@ class OnlineSession:
         mask_version: int | None = None,
         interface_max_apdu_length: int | None = None,
         locale: str | None = None,
+        object_types: dict[int, int] | None = None,
     ) -> None:
         self._xknx = xknx
         self._address = address
@@ -60,6 +64,7 @@ class OnlineSession:
         self._mask_version = mask_version
         self._interface_max = interface_max_apdu_length
         self._locale = locale
+        self._object_types = dict(object_types or {})
         self._descriptor: int | None = None
         self._manager: ConnectionManager | None = None
         self._programmer: DeviceProgrammer | None = None
@@ -126,16 +131,49 @@ class OnlineSession:
             return self._interface_max
         return INTERFACE_MAX_APDU_LENGTH
 
+    @property
+    def locale(self) -> str | None:
+        return self._locale
+
+    async def locate_interface_object(self, object_type: int, instance: int) -> int:
+        """Index of the ``instance``-th (from 1) interface object of a type: the objects the
+        device type declares first, then the device's further objects."""
+        programmer = self.programmer
+        seen = 0
+        for index in sorted(self._object_types):
+            if self._object_types[index] == object_type:
+                seen += 1
+                if seen == instance:
+                    return index
+        index = max(self._object_types, default=-1) + 1
+        while index <= 0xFF:
+            data = await programmer.read_property(index, PID_OBJECT_TYPE)
+            if len(data) < 2:
+                break
+            if int.from_bytes(data[:2], "big") == object_type:
+                seen += 1
+                if seen == instance:
+                    return index
+            index += 1
+        raise HostError(
+            dotnet_text("resource_not_available", self._locale), number=COR_E_EXCEPTION
+        )
+
     async def restart(self) -> None:
         await self.programmer.restart()
         await self.disconnect()
 
 
-def _bytes(data: Any) -> bytes:
-    if isinstance(data, str):
-        return data.encode("latin-1")
-    values = cast("list[Any]", data or [])
-    return bytes(int(v) & 0xFF for v in values)
+def _dotnet_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "System.Boolean"
+    if isinstance(value, int):
+        return "System.Int32"
+    if isinstance(value, float):
+        return "System.Double"
+    if isinstance(value, str):
+        return "System.String"
+    return "System.Object"
 
 
 class OnlineHost:
@@ -162,6 +200,17 @@ class OnlineHost:
                     future.cancel()
                     raise AbortRequested() from None
 
+    def _bytes(self, data: Any) -> bytes:
+        if data is None:
+            return b""
+        if not isinstance(data, list):
+            text = dotnet_text("invalid_cast", self._session.locale)
+            raise HostError(
+                text.format(_dotnet_type(data), "System.Byte[]"), number=E_NOINTERFACE
+            )
+        values = cast("list[Any]", data)
+        return bytes(int(v) & 0xFF for v in values)
+
     def connect(self) -> None:
         self._wait(self._session.connect())
 
@@ -174,55 +223,68 @@ class OnlineHost:
     def get_max_apdu_length(self) -> int:
         return self._session.max_apdu_length()
 
-    def locate_interface_object(self, object_type: Any, occurrence: Any = 0) -> int:
-        programmer = self._session.programmer
+    def locate_interface_object(self, object_type: Any, instance: Any) -> int:
         return self._wait(
-            programmer.locate_object(int(object_type), int(occurrence or 0))
+            self._session.locate_interface_object(int(object_type), int(instance))
         )
 
-    def read_function_property(self, obj: Any, pid: Any) -> list[int]:
-        programmer = self._session.programmer
-        return list(
-            self._wait(programmer.function_property_raw(int(obj), int(pid), None))
-        )
-
-    def invoke_function_property(self, obj: Any, pid: Any, data: Any) -> list[int]:
+    def read_function_property(self, obj: Any, pid: Any, data: Any) -> list[int]:
+        payload = self._bytes(data)
         programmer = self._session.programmer
         return list(
             self._wait(
-                programmer.function_property_raw(int(obj), int(pid), _bytes(data))
+                programmer.function_property_raw(
+                    int(obj), int(pid), payload, command=False
+                )
+            )
+        )
+
+    def invoke_function_property(self, obj: Any, pid: Any, data: Any) -> list[int]:
+        payload = self._bytes(data)
+        programmer = self._session.programmer
+        return list(
+            self._wait(
+                programmer.function_property_raw(
+                    int(obj), int(pid), payload, command=True
+                )
             )
         )
 
     def read_property(
-        self, obj: Any, pid: Any, _type: Any = None, start: Any = 1, count: Any = 1
+        self, obj: Any, pid: Any, _type: Any, start: Any, count: Any
     ) -> list[int]:
         programmer = self._session.programmer
-        return list(
-            self._wait(
-                programmer.read_property(
-                    int(obj), int(pid), count=int(count), start_index=int(start)
-                )
+        data = self._wait(
+            programmer.read_property(
+                int(obj), int(pid), count=int(count), start_index=int(start)
             )
         )
+        if not data:
+            text = dotnet_text("property_empty", self._session.locale)
+            raise HostError(
+                text.format(int(obj), int(pid), int(start), int(count)),
+                number=COR_E_EXCEPTION,
+            )
+        return list(data)
 
     def write_property(
         self,
         obj: Any,
         pid: Any,
-        _type: Any = None,
-        start: Any = 1,
-        count: Any = 1,
-        data: Any = None,
-        verify: Any = False,
+        _type: Any,
+        start: Any,
+        count: Any,
+        data: Any,
+        verify: Any,
     ) -> list[int]:
+        payload = self._bytes(data)
         programmer = self._session.programmer
         return list(
             self._wait(
                 programmer.write_property(
                     int(obj),
                     int(pid),
-                    _bytes(data),
+                    payload,
                     count=int(count),
                     start_index=int(start),
                     verify=bool(verify),
@@ -234,22 +296,20 @@ class OnlineHost:
         programmer = self._session.programmer
         return list(self._wait(programmer.read_memory(int(address), int(size))))
 
-    def write_memory(self, address: Any, data: Any, verify: Any = False) -> None:
+    def write_memory(self, address: Any, data: Any, verify: Any) -> None:
+        payload = self._bytes(data)
         programmer = self._session.programmer
-        self._wait(
-            programmer.write_memory(int(address), _bytes(data), verify=bool(verify))
-        )
+        self._wait(programmer.write_memory(int(address), payload, verify=bool(verify)))
 
     def read_user_memory(self, address: Any, size: Any) -> list[int]:
         programmer = self._session.programmer
         return list(self._wait(programmer.read_user_memory(int(address), int(size))))
 
-    def write_user_memory(self, address: Any, data: Any, verify: Any = False) -> None:
+    def write_user_memory(self, address: Any, data: Any, verify: Any) -> None:
+        payload = self._bytes(data)
         programmer = self._session.programmer
         self._wait(
-            programmer.write_user_memory(
-                int(address), _bytes(data), verify=bool(verify)
-            )
+            programmer.write_user_memory(int(address), payload, verify=bool(verify))
         )
 
     def restart(self) -> None:

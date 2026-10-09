@@ -211,3 +211,27 @@ def test_nested_context_inside_host_callback() -> None:
         script='function h(device) { var a = device.getParameterByName("A"); a.value = 21; return device.getParameterByName("B").value; }',
     )
     assert ctx.invoke("h", [DEVICE]).value == 42
+
+
+def test_host_methods_take_exact_argument_counts() -> None:
+    ctx = ScriptContext(
+        host={"o.readProperty": lambda *a: list(a), "g.text": lambda t: None},
+        script="""
+        function e(f) { try { f(); return "none"; } catch (x) { return x.name + x.number; } }
+        function h(online, progress) {
+            return [
+                e(function () { online.readProperty(0, 56); }),
+                e(function () { online.readProperty(0, 56, 0, 1, 1, 2); }),
+                online.readProperty(0, 56, 0, 1, 1).length,
+                e(function () { progress.setText(); }),
+                typeof online.connect,
+                typeof online.readProperty,
+                typeof progress.setText
+            ].join(",");
+        }
+        """,
+    )
+    assert ctx.invoke("h", [{"$host": "online"}, {"$host": "progress"}]).value == (
+        "TypeError-2146828283,TypeError-2146827838,5,TypeError-2146828283,"
+        "undefined,unknown,unknown"
+    )

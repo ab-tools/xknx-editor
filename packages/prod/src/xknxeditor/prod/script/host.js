@@ -56,6 +56,24 @@
     return decode(r.v);
   }
 
+  function argumentError(message, number) {
+    if (g.__xk) return g.__xk.typeError(message, number);
+    var err = new TypeError(message);
+    err.number = number;
+    err.description = message;
+    return err;
+  }
+
+  function arity(f, n) {
+    return function () {
+      if (arguments.length < n) throw argumentError("Invalid procedure call or argument", -2146828283);
+      if (arguments.length > n) {
+        throw argumentError("Wrong number of arguments or invalid property assignment", -2146827838);
+      }
+      return fnApply.call(f, this, arguments);
+    };
+  }
+
   function method(f) {
     defineProperty(f, "__xk_unknown", { value: true });
     return f;
@@ -81,13 +99,13 @@
 
   function device(scope) {
     var d = {
-      getParameterByName: function (name) { return param(host("d.byName", scope, name)); },
-      getParameterById: function (id) { return param(host("d.byId", scope, id)); },
-      getParameterByUniqueNumber: function (n) { return param(host("d.byNumber", scope, n)); },
-      getMessage: function (id) {
+      getParameterByName: arity(function (name) { return param(host("d.byName", scope, name)); }, 1),
+      getParameterById: arity(function (id) { return param(host("d.byId", scope, id)); }, 1),
+      getParameterByUniqueNumber: arity(function (n) { return param(host("d.byNumber", scope, n)); }, 1),
+      getMessage: arity(function (id) {
         var m = host("d.message", id);
         return m === null ? undefined : m;
-      },
+      }, 1),
       withUndo: function (description, fn) {
         host("d.undoBegin", description === undefined ? "" : String(description));
         try {
@@ -111,42 +129,41 @@
     "writeUserMemory", "restart", "coapReadCollection", "coapGet", "coapPut", "coapPost"
   ];
 
-  var ONLINE_ARITY = { locateInterfaceObject: 2, readProperty: 5, coapGet: 1 };
-
-  function argumentError() {
-    var message = "Invalid procedure call or argument";
-    if (g.__xk) return g.__xk.typeError(message, -2146828283);
-    var err = new TypeError(message);
-    err.number = -2146828283;
-    err.description = message;
-    return err;
-  }
+  var ONLINE_ARITY = {
+    connect: 0, disconnect: 0, readDeviceDescriptor0: 0, getMaxApduLength: 0,
+    locateInterfaceObject: 2, readFunctionProperty: 3, invokeFunctionProperty: 3,
+    readProperty: 5, writeProperty: 7, readMemory: 2, writeMemory: 3, readUserMemory: 2,
+    writeUserMemory: 3, restart: 0, coapReadCollection: 1, coapGet: 1, coapPut: 2, coapPost: 2
+  };
 
   function online() {
     var o = {};
     for (var i = 0; i < ONLINE.length; i++) {
       o[ONLINE[i]] = (function (n) {
-        return function () {
-          if (hasOwn.call(ONLINE_ARITY, n) && arguments.length < ONLINE_ARITY[n]) throw argumentError();
+        return arity(function () {
           var a = ["o." + n];
           for (var j = 0; j < arguments.length; j++) a.push(arguments[j]);
           return fnApply.call(host, null, a);
-        };
+        }, ONLINE_ARITY[n]);
       })(ONLINE[i]);
     }
-    return methods(o);
+    methods(o);
+    defineProperty(o.connect, "__xk_typeof", { value: "undefined" });
+    return o;
   }
 
   function progress() {
     return methods({
-      setProgress: function (v) { host("g.progress", Number(v)); },
-      setText: function (t) { host("g.text", t === undefined ? "" : String(t)); },
-      isCanceled: function () { return host("g.canceled"); }
+      setProgress: arity(function (v) { host("g.progress", Number(v)); }, 1),
+      setText: arity(function (t) { host("g.text", t === undefined ? "" : String(t)); }, 1),
+      isCanceled: arity(function () { return host("g.canceled"); }, 0)
     });
   }
 
   function logger(level) {
-    return method(function (msg) { host("log", level, msg === undefined || msg === null ? "" : String(msg)); });
+    return method(arity(function (msg) {
+      host("log", level, msg === undefined || msg === null ? "" : String(msg));
+    }, 1));
   }
 
   function resolve(a) {

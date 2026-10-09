@@ -34,6 +34,22 @@ _DOTNET: dict[str, dict[str, str]] = {
         "de": "Der Objektverweis wurde nicht auf eine Objektinstanz festgelegt.",
         "nl": "De objectverwijzing is niet op een exemplaar van een object ingesteld.",
     },
+    "invalid_cast": {
+        "en": "Unable to cast object of type '{0}' to type '{1}'.",
+        "de": 'Das Objekt des Typs "{0}" kann nicht in Typ "{1}" umgewandelt werden.',
+        "nl": "Kan object van het type {0} niet converteren naar het type {1}.",
+    },
+    # Observed in German only; the English texts are best guesses.
+    "resource_not_available": {
+        "en": "The selected device resource is currently not available.",
+        "de": "Die ausgewählte Geräte-Ressource ist zurzeit nicht verfügbar.",
+    },
+    "property_empty": {
+        "en": "An attempt was made to read a protected or nonexistent memory area.\n"
+        "Reading Property({0}/{1}, {2}, {3}) failed: Empty response",
+        "de": "Es wurde versucht, einen geschützten oder nicht vorhandenen Speicherbereich "
+        "zu lesen.\nLesen von Property({0}/{1}, {2}, {3}) fehlgeschlagen: Empty response",
+    },
     "format": {
         "en": "Input string was not in a correct format.",
         "de": "Die Eingabezeichenfolge hat das falsche Format.",

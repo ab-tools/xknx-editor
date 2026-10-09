@@ -1317,6 +1317,7 @@
   }
 
   function typeOf(v) {
+    if (typeof v === "function" && typeof v.__xk_typeof === "string") return v.__xk_typeof;
     if (typeof v === "function" && v.__xk_unknown === true) return "unknown";
     return typeof v;
   }

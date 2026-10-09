@@ -237,3 +237,40 @@ def test_connect_is_idempotent_and_caches_the_descriptor(
     host.disconnect()
     with pytest.raises(HostError):
         host.read_device_descriptor0()
+
+
+def test_locate_uses_declared_objects_then_scans(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(object_types={0: 0, 1: 1, 6: 4}, descriptor=0x07B0)
+    manager = _Manager(device)
+    monkeypatch.setattr(script_online, "management_session", lambda *a, **k: manager)
+    session = OnlineSession(
+        None,  # type: ignore[arg-type]
+        DEVICE,
+        object_types={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 6},
+        locale="de-DE",
+    )
+    host = OnlineHost(
+        session, lambda c: asyncio.run_coroutine_threadsafe(c, loop), AbortToken()
+    )
+    host.connect()
+    sent = len(device.sent)
+    assert host.locate_interface_object(4, 1) == 4
+    assert len(device.sent) == sent
+    assert host.locate_interface_object(4, 2) == 6
+    with pytest.raises(HostError) as err:
+        host.locate_interface_object(0, 0)
+    assert (
+        err.value.message
+        == "Die ausgewählte Geräte-Ressource ist zurzeit nicht verfügbar."
+    )
+    with pytest.raises(HostError) as err:
+        host.read_property(99, 1, 0, 1, 1)
+    assert err.value.message.endswith(
+        "Lesen von Property(99/1, 1, 1) fehlgeschlagen: Empty response"
+    )
+    with pytest.raises(HostError) as err:
+        host.read_function_property(255, 255, 0)
+    assert err.value.number == -2147467262
+    assert "System.Int32" in err.value.message
