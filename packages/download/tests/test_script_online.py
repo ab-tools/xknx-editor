@@ -14,6 +14,7 @@ from xknx.telegram.apci import (
     APCI,
     DeviceDescriptorRead,
     DeviceDescriptorResponse,
+    PropertyValueRead,
 )
 from xknx.telegram.tpci import TConnect, TDataIndividual
 
@@ -165,7 +166,7 @@ def test_coap_is_not_implemented(
 
 class _SlowDevice(FakeDevice):
     async def request(self, payload: APCI, expected: type[APCI] | None) -> Telegram:
-        if isinstance(payload, DeviceDescriptorRead) and self.slow:
+        if isinstance(payload, PropertyValueRead) and self.slow:
             await asyncio.sleep(60)
         return await super().request(payload, expected)
 
@@ -181,7 +182,7 @@ def test_abort_interrupts_a_waiting_call(
     device.slow = True
     threading.Timer(0.2, abort.request).start()
     with pytest.raises(AbortRequested):
-        host.read_device_descriptor0()
+        host.read_property(0, 56, 0, 1, 1)
 
 
 def test_connect_negotiates_apdu_without_authorize(
@@ -214,3 +215,25 @@ def test_interface_limit_applies(
     assert host.get_max_apdu_length() == 200
     host.connect()
     assert host.get_max_apdu_length() == 200
+
+
+def test_connect_is_idempotent_and_caches_the_descriptor(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(descriptor=0x07B0)
+    host, manager = _host(loop, monkeypatch, device)
+    with pytest.raises(HostError) as err:
+        host.read_device_descriptor0()
+    assert err.value.number == -2147467261
+    with pytest.raises(HostError) as err:
+        host.read_property(0, 56, 0, 1, 1)
+    assert (err.value.message, err.value.number) == ("Not connected", -2146233079)
+    host.connect()
+    sent = len(device.sent)
+    host.connect()
+    assert manager.opened == 1
+    assert host.read_device_descriptor0() == 0x07B0
+    assert len(device.sent) == sent
+    host.disconnect()
+    with pytest.raises(HostError):
+        host.read_device_descriptor0()

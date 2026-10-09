@@ -202,6 +202,7 @@
     }
     var before = src.slice(0, pos).replace(/\s+$/, "");
     if (/(?:^|[^\w$])var$/.test(before) || /\.$/.test(before)) return "Expected identifier";
+    if (/(?:^|[^\w$])function(?:\s+[\w$]+)?\s*\((?:\s*[\w$]+\s*,)*$/.test(before)) return "Expected identifier";
     var CLOSE = { "{": "}", "(": ")", "[": "]" };
     if (pos >= src.replace(/\s+$/, "").length) {
       var open = unmatchedBracket(src);

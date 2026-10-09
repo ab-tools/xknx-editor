@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from .errors import COR_E_EXCEPTION
 
-NOT_CONNECTED = "No connection to the device. Call connect() first."
-COAP_NOT_SUPPORTED = "The method or operation is not implemented."
+# Observed: online calls without a connection, and CoAP on a device without IoT support.
+NOT_CONNECTED = "Not connected"
+COAP_NOT_SUPPORTED = "CoAP Operations can only be performed for IoT Devices."
 CANCELED = "The operation was canceled."
 
 # Observed: value checks when a script or a calculation sets a parameter.
@@ -27,6 +28,11 @@ _DOTNET: dict[str, dict[str, str]] = {
         "en": "The given key was not present in the dictionary.",
         "de": "Der angegebene Schlüssel war nicht im Wörterbuch angegeben.",
         "nl": "De opgegeven sleutel is niet aanwezig in de woordenlijst.",
+    },
+    "null_reference": {
+        "en": "Object reference not set to an instance of an object.",
+        "de": "Der Objektverweis wurde nicht auf eine Objektinstanz festgelegt.",
+        "nl": "De objectverwijzing is niet op een exemplaar van een object ingesteld.",
     },
     "format": {
         "en": "Input string was not in a correct format.",

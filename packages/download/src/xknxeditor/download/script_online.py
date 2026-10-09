@@ -7,8 +7,14 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeout
 from typing import TYPE_CHECKING, Any, cast
 
-from xknxeditor.prod.script.errors import E_NOTIMPL, AbortRequested, HostError
-from xknxeditor.prod.script.texts import COAP_NOT_SUPPORTED, NOT_CONNECTED
+from xknxeditor.prod.script.errors import (
+    COR_E_INVALIDOPERATION,
+    E_NOTIMPL,
+    E_POINTER,
+    AbortRequested,
+    HostError,
+)
+from xknxeditor.prod.script.texts import COAP_NOT_SUPPORTED, NOT_CONNECTED, dotnet_text
 
 from .programmer import (
     DEFAULT_MAX_APDU_LENGTH,
@@ -45,6 +51,7 @@ class OnlineSession:
         connectionless: bool = False,
         mask_version: int | None = None,
         interface_max_apdu_length: int | None = None,
+        locale: str | None = None,
     ) -> None:
         self._xknx = xknx
         self._address = address
@@ -52,6 +59,8 @@ class OnlineSession:
         self._connectionless = connectionless
         self._mask_version = mask_version
         self._interface_max = interface_max_apdu_length
+        self._locale = locale
+        self._descriptor: int | None = None
         self._manager: ConnectionManager | None = None
         self._programmer: DeviceProgrammer | None = None
 
@@ -62,11 +71,20 @@ class OnlineSession:
     @property
     def programmer(self) -> DeviceProgrammer:
         if self._programmer is None:
-            raise HostError(NOT_CONNECTED)
+            raise HostError(NOT_CONNECTED, number=COR_E_INVALIDOPERATION)
         return self._programmer
 
+    def device_descriptor(self) -> int:
+        """The device descriptor read by ``connect()``."""
+        if self._descriptor is None:
+            raise HostError(
+                dotnet_text("null_reference", self._locale), number=E_POINTER
+            )
+        return self._descriptor
+
     async def connect(self) -> None:
-        await self.disconnect()
+        if self._programmer is not None:
+            return
         manager = management_session(
             self._xknx,
             self._address,
@@ -93,9 +111,11 @@ class OnlineSession:
             await self.disconnect()
             raise
         self._programmer = programmer
+        self._descriptor = descriptor
 
     async def disconnect(self) -> None:
         manager, self._manager, self._programmer = self._manager, None, None
+        self._descriptor = None
         if manager is not None:
             await manager.close()
 
@@ -149,7 +169,7 @@ class OnlineHost:
         self._wait(self._session.disconnect())
 
     def read_device_descriptor0(self) -> int:
-        return self._wait(self._session.programmer.read_device_descriptor())
+        return self._session.device_descriptor()
 
     def get_max_apdu_length(self) -> int:
         return self._session.max_apdu_length()

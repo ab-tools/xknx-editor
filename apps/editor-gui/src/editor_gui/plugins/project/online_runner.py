@@ -82,6 +82,8 @@ class OnlineButtonRunner:
             security=conn.security_for(device),
             connectionless=run.button.online == "ConnectionLess",
             mask_version=mask,
+            interface_max_apdu_length=conn.interface_max_apdu_length,
+            locale=ui.script_env.locale if ui.script_env is not None else None,
         )
         online = OnlineHost(session, self._run_coroutine, run.abort)
         node_id = device.node_id

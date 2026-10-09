@@ -111,11 +111,23 @@
     "writeUserMemory", "restart", "coapReadCollection", "coapGet", "coapPut", "coapPost"
   ];
 
+  var ONLINE_ARITY = { locateInterfaceObject: 2, readProperty: 5, coapGet: 1 };
+
+  function argumentError() {
+    var message = "Invalid procedure call or argument";
+    if (g.__xk) return g.__xk.typeError(message, -2146828283);
+    var err = new TypeError(message);
+    err.number = -2146828283;
+    err.description = message;
+    return err;
+  }
+
   function online() {
     var o = {};
     for (var i = 0; i < ONLINE.length; i++) {
       o[ONLINE[i]] = (function (n) {
         return function () {
+          if (hasOwn.call(ONLINE_ARITY, n) && arguments.length < ONLINE_ARITY[n]) throw argumentError();
           var a = ["o." + n];
           for (var j = 0; j < arguments.length; j++) a.push(arguments[j]);
           return fnApply.call(host, null, a);

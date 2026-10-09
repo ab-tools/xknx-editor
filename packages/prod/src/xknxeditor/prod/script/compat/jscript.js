@@ -1391,6 +1391,7 @@
 
   var api = {
     tof: typeOf, ae: argsEnter, ax: argsExit,
+    typeError: function (message, number) { return jerr(NTypeError, message, number); },
     add: add, key: key, get: get, mth: mth, call: callMember, fcall: callFunction, tk: tick,
     fi: forInTarget, fiter: forInIterator, ctor: ctor, i: int64, dn: dropNames,
     ev: evalSource, re: literalRegex, err: function (e) {
