@@ -34,9 +34,16 @@ from xknxeditor.namespaces.intermediate.module_def_static_t_parameters_union_pro
 from xknxeditor.namespaces.intermediate.property_union_t import PropertyUnion
 
 from ..errors import EncodingError
+from ..script.errors import ParameterValidationError
 from ..script.values import check_value
 from .application_indexer import ApplicationIndexer
-from .calculation import CalculationScope, ChangeSet, Journal, run_calculations
+from .calculation import (
+    CalculationScope,
+    ChangeSet,
+    Journal,
+    run_calculations,
+    run_validations,
+)
 from .context import EvalCapture, EvalContext
 from .encode import (
     MemWrite,
@@ -805,7 +812,13 @@ class DynamicUI:
     def _validate(
         self, scope: ParameterState, local: str, ref_id: str, value: str
     ) -> None:
-        pass
+        try:
+            run_validations(
+                self._idx, local, value, self._calc_scope(scope), self.script_env
+            )
+        except ParameterValidationError as exc:
+            exc.ref_id = ref_id
+            raise
 
     def _change(
         self,
@@ -822,7 +835,11 @@ class DynamicUI:
         if local not in self._idx.parameter_refs or tc is None:
             raise ValueError(f"unknown parameter ref {ref_id!r}")
         if strict:
-            value = check_value(value, tc, text_encoding=self._text_encoding())
+            try:
+                value = check_value(value, tc, text_encoding=self._text_encoding())
+            except ValueError as exc:
+                text = self._idx.type_error_text(local)
+                raise ParameterValidationError(text or str(exc), ref_id=ref_id) from exc
         else:
             value = validate_parameter_value(value, tc)
         if require_active:

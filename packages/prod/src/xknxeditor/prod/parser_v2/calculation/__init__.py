@@ -16,7 +16,13 @@ from xknxeditor.namespaces.intermediate.parameter_calculation_t_language import 
     ParameterCalculationLanguage,
 )
 
-from ...script import CalculationError, ScriptContext, ScriptError
+from ...script import (
+    CalculationError,
+    ParameterValidationError,
+    ScriptAborted,
+    ScriptContext,
+    ScriptError,
+)
 from ...script.values import from_js, to_js
 
 if TYPE_CHECKING:
@@ -196,4 +202,56 @@ def _run_inline(
     return _as_dict(value)
 
 
-__all__ = ["CalculationScope", "ChangeSet", "Journal", "run_calculations"]
+VALIDATION_FAILED = "Parameter value cannot be set, because validation failed."
+
+
+def run_validations(
+    idx: ApplicationIndexer,
+    local_ref: str,
+    value: str,
+    scope: CalculationScope,
+    env: JScriptEnv | None,
+) -> None:
+    """Run every ParameterValidation containing ``local_ref`` against the proposed ``value``."""
+    for validation in idx.validations_for(local_ref):
+        refs = validation.parameters.parameter_ref_ref
+        changed = next((_alias(idx, pr) for pr in refs if pr.ref_id == local_ref), "")
+        new_value = to_js(value, idx.type_of(local_ref))
+        inputs = {
+            _alias(idx, pr): new_value
+            if pr.ref_id == local_ref
+            else to_js(scope.get(pr.ref_id), idx.type_of(pr.ref_id))
+            for pr in refs
+        }
+        context = _context_object(validation.validation_parameters, validation.id)
+        jscript: Any = env if env is not None else True
+        try:
+            ctx = ScriptContext(
+                script=idx.script or "",
+                get_message=True,
+                host={"a.message": idx.message_text},
+                jscript=jscript,
+            )
+            result = ctx.invoke(
+                validation.validation_func, [inputs, changed, new_value, context]
+            ).value
+        except ScriptAborted:
+            raise
+        except ScriptError as exc:
+            log.warning("parameter validation %s failed: %s", validation.id, exc)
+            raise ParameterValidationError(VALIDATION_FAILED, ref_id=local_ref) from exc
+        if result is True:
+            continue
+        if isinstance(result, str) and result:
+            raise ParameterValidationError(result, ref_id=local_ref)
+        raise ParameterValidationError(VALIDATION_FAILED, ref_id=local_ref)
+
+
+__all__ = [
+    "VALIDATION_FAILED",
+    "CalculationScope",
+    "ChangeSet",
+    "Journal",
+    "run_calculations",
+    "run_validations",
+]

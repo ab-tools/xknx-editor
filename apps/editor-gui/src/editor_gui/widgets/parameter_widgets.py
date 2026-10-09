@@ -30,6 +30,15 @@ from xknxeditor.prod.parser_v2.ui.parameter import (
 
 # Parameters changed from their default are tinted to stand out.
 _CHANGED_COLOR = imgui.ImVec4(0.36, 0.71, 1.0, 1.0)
+_ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
+
+
+def _render_param_error(device: Device, ref_id: str) -> None:
+    error = device.param_errors.get(ref_id)
+    if error:
+        imgui.push_style_color(imgui.Col_.text, _ERROR_COLOR)
+        imgui.text_wrapped(error)
+        imgui.pop_style_color()
 
 
 def _default_display(param: UiParameter) -> str:
@@ -568,6 +577,7 @@ def _render_grid_block(
                             if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
                                 on_change(device, param.ref_id, param.default_value)
                             imgui.end_popup()
+                    _render_param_error(device, param.ref_id)
                     if req is not None:
                         popup_request = EnumPopupRequest(device=device, param=req.param)
                 elif label is not None:
@@ -642,6 +652,7 @@ def _render_param_table(
                 if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
                     on_change(device, param.ref_id, param.default_value)
                 imgui.end_popup()
+            _render_param_error(device, param.ref_id)
             if req is not None:
                 popup_request = EnumPopupRequest(device=device, param=req.param)
         imgui.end_table()
