@@ -207,6 +207,10 @@ class Device:
     _dynamic_ui_dirty: bool = field(
         default=False, repr=False, compare=False, init=False
     )
+    # UI frozen while a script changes this device's parameters on the script worker.
+    _script_ui: list[UiNode] | None = field(
+        default=None, repr=False, compare=False, init=False
+    )
     # Message of the last rejected edit per parameter, shown until it is edited again.
     param_errors: dict[str, str] = field(
         default_factory=dict[str, str], repr=False, compare=False, init=False
@@ -299,7 +303,28 @@ class Device:
             self._cached_rows = generate_rows(self.get_visible_com_objects())
         return self._cached_rows
 
+    @property
+    def script_running(self) -> bool:
+        return self._script_ui is not None
+
+    def begin_script(self) -> DynamicUI | None:
+        """Freeze what is rendered while a script changes parameters on another thread; the
+        returned evaluator must only be used by that script until :meth:`end_script`."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is None:
+            return None
+        self._script_ui = dyn.ui()
+        self.get_visible_com_objects()
+        self._dynamic_ui_dirty = True
+        return dyn
+
+    def end_script(self) -> None:
+        self._script_ui = None
+        self._touched()
+
     def get_ui(self) -> list[UiNode]:
+        if self._script_ui is not None:
+            return self._script_ui
         dyn = self._ensure_dynamic_ui()
         if dyn is None:
             return []

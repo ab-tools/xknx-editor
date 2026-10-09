@@ -1795,6 +1795,23 @@ class ProjectService:
         self._persist_param_changes(device, changes, old_active)
         return changes
 
+    def parameter_driven_com_objects(self, device: Device) -> set[str]:
+        """The active com-object set a later :meth:`commit_param_changes` diffs against."""
+        if not self._co_reconcile_enabled:
+            return set[str]()
+        return device.active_parameter_driven_com_object_ref_ids()
+
+    def commit_param_changes(
+        self,
+        device: Device,
+        changes: "ChangeSet",
+        old_active: set[str],
+        *,
+        label: str | None = None,
+    ) -> None:
+        """Persist changes already applied to the live device as one undo step."""
+        self._persist_param_changes(device, changes, old_active, label=label)
+
     def _persist_param_changes(
         self,
         device: Device,

@@ -27,6 +27,7 @@ from ...script.values import from_js, to_js
 
 if TYPE_CHECKING:
     from ...script.compat.runtime import JScriptEnv
+    from ...script.sandbox import AbortToken
     from ..application_indexer import ApplicationIndexer
 
 log = logging.getLogger(__name__)
@@ -104,11 +105,12 @@ def run_calculations(
     env: JScriptEnv | None,
     *,
     raise_errors: bool,
+    abort: AbortToken | None = None,
 ) -> None:
     """Run the calculation plan a change of ``local_ref`` triggers."""
     for calc, direction in idx.calculation_plan(local_ref):
         try:
-            _run_one(idx, calc, direction, scope, journal, env)
+            _run_one(idx, calc, direction, scope, journal, env, abort)
         except CalculationError:
             if raise_errors:
                 raise
@@ -122,6 +124,7 @@ def _run_one(
     scope: CalculationScope,
     journal: Journal,
     env: JScriptEnv | None,
+    abort: AbortToken | None,
 ) -> None:
     if calc.language == ParameterCalculationLanguage.VBSCRIPT:
         if calc.id not in _vbscript_warned:
@@ -149,16 +152,22 @@ def _run_one(
     try:
         if func:
             ctx = ScriptContext(
-                script=idx.script or "", get_message=True, host=host, jscript=jscript
+                script=idx.script or "",
+                get_message=True,
+                host=host,
+                jscript=jscript,
+                abort=abort,
             )
             result = ctx.invoke(
                 func, [inputs, output, _context_object(params, calc.id)], readback=[1]
             )
             computed = _as_dict(result.readback[0])
         elif inline:
-            computed = _run_inline(inline, inputs, output, host, jscript)
+            computed = _run_inline(inline, inputs, output, host, jscript, abort)
         else:
             return
+    except ScriptAborted:
+        raise
     except ScriptError as exc:
         raise CalculationError(
             f"Scripting engine returned with error '{exc.message}'.",
@@ -184,6 +193,7 @@ def _run_inline(
     output: dict[str, Any],
     host: dict[str, Any],
     jscript: Any,
+    abort: AbortToken | None,
 ) -> dict[str, Any]:
     names = {**output, **inputs}
     decls = "".join(
@@ -197,7 +207,9 @@ def _run_inline(
     script = (
         decls + "\n" + code + "\nfunction __xk_outputs() { return {" + reader + "}; }\n"
     )
-    ctx = ScriptContext(script=script, get_message=True, host=host, jscript=jscript)
+    ctx = ScriptContext(
+        script=script, get_message=True, host=host, jscript=jscript, abort=abort
+    )
     value = ctx.invoke("__xk_outputs", []).value
     return _as_dict(value)
 
@@ -211,6 +223,7 @@ def run_validations(
     value: str,
     scope: CalculationScope,
     env: JScriptEnv | None,
+    abort: AbortToken | None = None,
 ) -> None:
     """Run every ParameterValidation containing ``local_ref`` against the proposed ``value``."""
     for validation in idx.validations_for(local_ref):
@@ -231,6 +244,7 @@ def run_validations(
                 get_message=True,
                 host={"a.message": idx.message_text},
                 jscript=jscript,
+                abort=abort,
             )
             result = ctx.invoke(
                 validation.validation_func, [inputs, changed, new_value, context]

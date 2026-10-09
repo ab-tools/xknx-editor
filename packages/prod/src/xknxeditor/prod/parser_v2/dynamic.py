@@ -82,6 +82,7 @@ from .nodes import (
 )
 from .state import (
     GlobalState,
+    ModuleState,
     ParameterState,
     compute_arg_defaults,
     compute_param_ref_defaults,
@@ -90,6 +91,7 @@ from .ui import UiNode
 
 if TYPE_CHECKING:
     from ..script.compat.runtime import JScriptEnv
+    from ..script.sandbox import AbortToken
 
 __all__ = [
     "AssignNode",
@@ -488,8 +490,16 @@ def _prune_inactive(
     return result
 
 
+def _as_int(value: object) -> int | None:
+    try:
+        number = float(str(value))
+    except ValueError:
+        return None
+    return int(number) if number.is_integer() else None
+
+
 class DynamicUI:
-    __slots__ = ("_app", "_idx", "_state", "_tree", "_ui", "script_env")
+    __slots__ = ("_app", "_idx", "_state", "_tree", "_ui", "script_abort", "script_env")
 
     def __init__(
         self,
@@ -513,6 +523,7 @@ class DynamicUI:
         )
         self._ui: list[UiNode] | None = None
         self.script_env: JScriptEnv | None = None
+        self.script_abort: AbortToken | None = None
 
     def _discover_union_activity(self) -> None:
         """Discovery pass ahead of a render eval: evaluate the tree WITHOUT union suppression so every
@@ -814,7 +825,12 @@ class DynamicUI:
     ) -> None:
         try:
             run_validations(
-                self._idx, local, value, self._calc_scope(scope), self.script_env
+                self._idx,
+                local,
+                value,
+                self._calc_scope(scope),
+                self.script_env,
+                self.script_abort,
             )
         except ParameterValidationError as exc:
             exc.ref_id = ref_id
@@ -862,6 +878,7 @@ class DynamicUI:
                 journal,
                 self.script_env,
                 raise_errors=raise_calc_errors,
+                abort=self.script_abort,
             )
         except BaseException:
             journal.rollback()
@@ -890,6 +907,7 @@ class DynamicUI:
                     journal,
                     self.script_env,
                     raise_errors=False,
+                    abort=self.script_abort,
                 )
         self._ui = None
         return journal.changes()
@@ -945,3 +963,48 @@ class DynamicUI:
     @property
     def indexer(self) -> ApplicationIndexer:
         return self._idx
+
+    @property
+    def application_name(self) -> str:
+        return self._app.name
+
+    def local_ref_id(self, ref_id: str) -> str:
+        """The ParameterRef id a (possibly module-qualified) ref id stands for."""
+        return self._locate(ref_id)[1]
+
+    def find_parameter_ref(
+        self, kind: str, key: object, instance_id: str | None = None
+    ) -> str | None:
+        """Qualified ref for a script lookup by ``name``, ``id`` or ``number``: the module
+        instance's definition is searched first, then the application."""
+        scopes: list[tuple[str | None, ParameterState]] = []
+        if instance_id:
+            found = self._state.find_scope_for_qualified(instance_id + "_")
+            if (
+                found is not None
+                and isinstance(found[0], ModuleState)
+                and found[0].ref_id is not None
+            ):
+                scopes.append((found[0].ref_id, found[0]))
+        scopes.append((None, self._state))
+        idx = self._idx
+        for owner, scope in scopes:
+            local: str | None = None
+            if kind == "name":
+                local = idx.refs_by_name.get(owner, {}).get(str(key))
+            elif kind == "number":
+                number = _as_int(key)
+                if number is not None:
+                    local = idx.refs_by_number.get(owner, {}).get(number)
+            else:
+                text = str(key)
+                for cand in (text, f"{owner or self._app.id}_{text}"):
+                    if cand in idx.parameter_refs and idx.ref_owner.get(cand) == owner:
+                        local = cand
+                        break
+            if local is not None:
+                return scope.qualify(local) if owner is not None else local
+        return None
+
+    def is_parameter_active(self, ref_id: str) -> bool:
+        return ref_id in self.active_parameter_ref_ids()

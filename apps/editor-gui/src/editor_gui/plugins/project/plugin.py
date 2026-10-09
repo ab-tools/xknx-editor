@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from editor_gui.plugins.base import Logger, PanelDefinition, PluginAPI
+from editor_gui.plugins.project.button_runner import ButtonRunner
 from editor_gui.plugins.project.program_queue import ProgramQueue, QueueItem
 from editor_gui.plugins.project.service import DeviceConfigClipboard
 from editor_gui.plugins.project.strings import S
@@ -72,6 +73,7 @@ class ProjectPlugin:
         self._api = api
         self._get_selected_node_ids = get_selected_node_ids
         api.project.set_logger(Logger(api.log, "project"))
+        self._button_runner = ButtonRunner(api.project, Logger(api.log, "project"))
 
         # Programming queue: repeated "Program" presses serialise onto the single bus slot.
         self._program_queue = ProgramQueue(
@@ -1040,10 +1042,14 @@ class ProjectPlugin:
         self._api.log.info(
             "button clicked", plugin="project", button=button.id, handler=button.handler
         )
+        if button.online is None:
+            self._button_runner.start(device, button)
 
     def _button_state(
         self, device: "Device", button: "UiButton"
     ) -> tuple[bool, str | None]:
+        if device.script_running:
+            return False, S.BUTTON_DEVICE_BUSY
         if button.online is not None:
             info = self._api.project.get_device_info(device.node_id)
             if info is None or not info.individual_address_loaded:
@@ -1310,6 +1316,7 @@ class ProjectPlugin:
         return self._panels
 
     def render_overlays(self) -> None:
+        self._button_runner.render()
         self._memory_preview.render()
         self._preflight_result.render()
 
