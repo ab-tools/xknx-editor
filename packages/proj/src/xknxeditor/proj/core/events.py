@@ -743,6 +743,7 @@ class CompositeEvent(Event):
     event_type: ClassVar[str] = "Composite"
 
     events: list[Event] = field(default_factory=list[Event])
+    label: str | None = None
 
     def apply(self, session: Session) -> None:
         for event in self.events:
@@ -753,19 +754,23 @@ class CompositeEvent(Event):
             event.revert(session)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "events": [
                 {"type": event.event_type, "data": event.to_dict()}
                 for event in self.events
             ]
         }
+        if self.label is not None:
+            data["label"] = self.label
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CompositeEvent:
         return cls(
             events=[
                 deserialize_event(sub["type"], sub["data"]) for sub in data["events"]
-            ]
+            ],
+            label=data.get("label"),
         )
 
 

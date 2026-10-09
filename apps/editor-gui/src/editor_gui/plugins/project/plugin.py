@@ -1019,7 +1019,15 @@ class ProjectPlugin:
     def _handle_param_change(
         self, device: "Device", param_id: str, new_value: str
     ) -> None:
-        self._api.project.set_param(device, param_id, new_value)
+        try:
+            self._api.project.set_param(device, param_id, new_value)
+        except ValueError as exc:
+            self._api.log.warning(
+                "parameter change rejected",
+                plugin="project",
+                param=param_id,
+                error=str(exc),
+            )
 
     def _handle_param_change_all(
         self, device: "Device", param_id: str, new_value: str

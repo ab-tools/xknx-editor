@@ -632,6 +632,7 @@ class RecoverService:
                 )
             self._apply_flags(device, recovered, number_to_ref)
             self._apply_links(device, recovered, number_to_ref, ga_ids)
+            project.recalculate_params(device_id, list(recovered.parameters.values))
         except Exception as exc:  # never crash the render loop / batch on one device
             entry.applied = True  # do not retry this device every frame
             entry.state = S.STATE_ERROR

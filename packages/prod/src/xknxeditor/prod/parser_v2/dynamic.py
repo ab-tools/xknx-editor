@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
 from xknxeditor.namespaces.intermediate import (
@@ -826,17 +826,14 @@ class DynamicUI:
         else:
             value = validate_parameter_value(value, tc)
         if require_active:
+            if strict:
+                self.ui()
             active = self._state.active_param_refs()
             if active and ref_id not in active:
                 raise ValueError(
                     f"parameter ref {ref_id!r} is not active in the current UI state"
                 )
         journal = self._journal()
-
-        def scoped_get(local_ref: str) -> str | None:
-            v = scope.get(local_ref)
-            return v if v is not None else self._idx.default_value(local_ref)
-
         try:
             if validate:
                 self._validate(scope, local, ref_id, value)
@@ -844,7 +841,7 @@ class DynamicUI:
             run_calculations(
                 self._idx,
                 local,
-                CalculationScope(get=scoped_get, qualify=scope.qualify_local),
+                self._calc_scope(scope),
                 journal,
                 self.script_env,
                 raise_errors=raise_calc_errors,
@@ -853,6 +850,30 @@ class DynamicUI:
             journal.rollback()
             self._ui = None
             raise
+        self._ui = None
+        return journal.changes()
+
+    def _calc_scope(self, scope: ParameterState) -> CalculationScope:
+        def get(local_ref: str) -> str | None:
+            v = scope.get(local_ref)
+            return v if v is not None else self._idx.default_value(local_ref)
+
+        return CalculationScope(get=get, qualify=scope.qualify_local)
+
+    def recalculate(self, ref_ids: Iterable[str]) -> ChangeSet:
+        """Run the calculation plans of ``ref_ids`` without changing them; errors are logged."""
+        journal = self._journal()
+        for ref_id in ref_ids:
+            scope, local = self._locate(ref_id)
+            if local in self._idx.parameter_refs:
+                run_calculations(
+                    self._idx,
+                    local,
+                    self._calc_scope(scope),
+                    journal,
+                    self.script_env,
+                    raise_errors=False,
+                )
         self._ui = None
         return journal.changes()
 
