@@ -39,7 +39,7 @@ from xknxeditor.prod.errors import ArchiveError
 if TYPE_CHECKING:
     from concurrent.futures import Future
 
-    from editor_gui.device import Device
+    from editor_gui.device import Device, UnloadedDevice
     from editor_gui.programming import DeviceOverview
     from xknxeditor.download.image import GroupCommunication
     from xknxeditor.download.scope import DownloadScope
@@ -145,6 +145,7 @@ class ProjectPlugin:
             on_duplicate_config=self._on_duplicate_config,
             can_paste_config=self._can_paste_config,
             count_paste_targets=self._count_paste_targets,
+            get_unloaded_devices=lambda: api.project.unloaded_devices,
         )
 
         self._configure_panel = ConfigurePanel(
@@ -407,7 +408,7 @@ class ProjectPlugin:
             include_links=include_links,
         )
 
-    def _on_delete_device(self, device: "Device") -> None:
+    def _on_delete_device(self, device: "Device | UnloadedDevice") -> None:
         node_id = device.node_id
         was_selected = self._selected_node_id() == node_id or (
             node_id in self._api.project.selected_node_ids

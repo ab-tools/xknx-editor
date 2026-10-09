@@ -1,0 +1,110 @@
+"""A device loads its application through its hardware program, and a device whose application can
+not be loaded stays visible as an unloaded device."""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from editor_gui.device import Device, UnloadedDevice
+from editor_gui.plugins.base import Logger
+from editor_gui.plugins.catalog.service import CatalogService
+from editor_gui.plugins.logger.service import LogService
+from editor_gui.plugins.project.service import ProjectService
+
+_APP_ID = "M-0008_A-7072-21-5CC3-O000A"
+
+
+def _fixture() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        cand = (
+            parent / "packages/prod/tests/fixtures/gira_2gang_button_interface.knxprod"
+        )
+        if cand.exists():
+            return cand
+    raise FileNotFoundError("gira_2gang_button_interface.knxprod not found")
+
+
+def _open(cat: CatalogService, path: Path) -> ProjectService:
+    proj = ProjectService(cat)
+    proj.set_logger(Logger(LogService(), "project"))
+    proj.open(path)
+    return proj
+
+
+def _project_with_device(tmp_path: Path) -> tuple[Path, int, str]:
+    """A saved project with one device of the fixture product; returns its path, id and program."""
+    cat = CatalogService(tmp_path / "c.xknxcatalog")
+    cat.import_knxprod(_fixture())
+    product = next(p for p in cat.get_products() if p.application_id == _APP_ID)
+    app = cat.get_application(_APP_ID)
+    assert app is not None and product.hardware2program_ref_id is not None
+    proj = ProjectService(cat)
+    proj.set_logger(Logger(LogService(), "project"))
+    path = tmp_path / "p.xknx"
+    proj.new(path)
+    device_id = proj.add_device(
+        product.product_ref_id, product.hardware2program_ref_id, "Button", app
+    )
+    assert device_id is not None
+    proj.close()
+    return path, device_id, product.hardware2program_ref_id
+
+
+def test_program_without_catalog_item_loads(tmp_path: Path) -> None:
+    path, device_id, program = _project_with_device(tmp_path)
+    # Product data whose Catalog.xml has no item for the program still ingests the program.
+    with sqlite3.connect(tmp_path / "c.xknxcatalog") as db:
+        db.execute(
+            "DELETE FROM catalog_section_products WHERE hardware_program_id = ?",
+            (program,),
+        )
+    cat = CatalogService(tmp_path / "c.xknxcatalog")
+    assert all(p.hardware2program_ref_id != program for p in cat.get_products())
+
+    proj = _open(cat, path)
+    device = proj.find_device_by_node_id(device_id)
+    assert device is not None
+    assert device.app.id == _APP_ID
+    assert proj.unloaded_devices == []
+    proj.close()
+
+
+def test_device_without_application_stays_listed(tmp_path: Path) -> None:
+    path, device_id, program = _project_with_device(tmp_path)
+
+    proj = _open(CatalogService(tmp_path / "empty.xknxcatalog"), path)
+    assert proj.devices == []
+    (unloaded,) = proj.unloaded_devices
+    assert unloaded == UnloadedDevice(
+        node_id=device_id,
+        name="Button",
+        product_name="",
+        individual_address=unloaded.individual_address,
+        program_ref=program,
+    )
+    assert unloaded.individual_address
+    assert unloaded.display_name == "Button"
+
+    proj.remove_device(device_id)
+    assert proj.unloaded_devices == []
+    proj.close()
+
+
+def test_display_name_prefers_product_name(tmp_path: Path) -> None:
+    cat = CatalogService(tmp_path / "c.xknxcatalog")
+    cat.import_knxprod(_fixture())
+    app = cat.get_application(_APP_ID)
+    assert app is not None
+
+    named = Device(
+        node_id=1, name="Hall", product_name="Product", app=app, individual_address=""
+    )
+    unnamed = Device(
+        node_id=2, name="", product_name="Product", app=app, individual_address=""
+    )
+    bare = Device(node_id=3, name="", app=app, individual_address="")
+    assert named.display_name == "Hall"
+    assert unnamed.display_name == "Product"
+    assert bare.display_name == app.name
+    assert UnloadedDevice(4, "", "Product", "1.1.4", None).display_name == "Product"

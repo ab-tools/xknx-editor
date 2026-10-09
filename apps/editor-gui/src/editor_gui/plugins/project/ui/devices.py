@@ -3,10 +3,14 @@ from dataclasses import dataclass
 
 from imgui_bundle import imgui
 
-from editor_gui.device import Device
+from editor_gui.device import Device, UnloadedDevice
 from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui._filter import filter_box
 from editor_gui.plugins.project.ui.config_dialog import DeviceConfigDialog
+
+TreeDevice = Device | UnloadedDevice
+
+_UNLOADED_COLOR = imgui.ImVec4(0.95, 0.6, 0.25, 1.0)
 
 
 @dataclass
@@ -41,7 +45,7 @@ class DevicesPanel:
         get_selected_node_id: Callable[[], int | None] = lambda: None,
         on_select_devices: Callable[[Device, list[int]], None] | None = None,
         get_selected_node_ids: Callable[[], set[int]] = lambda: set(),
-        on_delete_device: Callable[[Device], None] = lambda _d: None,
+        on_delete_device: Callable[[TreeDevice], None] = lambda _d: None,
         on_copy_config: Callable[[int], None] = lambda _n: None,
         on_paste_config: Callable[[int, bool, bool], None] = lambda _n, _p, _l: None,
         on_duplicate_config: Callable[[int, bool, bool], None] = (
@@ -49,8 +53,10 @@ class DevicesPanel:
         ),
         can_paste_config: Callable[[int], bool] = lambda _n: False,
         count_paste_targets: Callable[[int], int] = lambda _n: 1,
+        get_unloaded_devices: Callable[[], list[UnloadedDevice]] = lambda: [],
     ) -> None:
         self._get_devices = get_devices
+        self._get_unloaded_devices = get_unloaded_devices
         self._get_areas = get_areas
         self._get_lines = get_lines
         self._on_select_device = on_select_device
@@ -85,11 +91,14 @@ class DevicesPanel:
         self._open_new_area_popup: bool = False
         self._open_new_line_popup: bool = False
         self._open_rename_popup: bool = False
-        self._delete_target_device: Device | None = None
+        self._delete_target_device: TreeDevice | None = None
         self._open_delete_device_popup: bool = False
 
     def render(self) -> None:
-        devices = self._get_devices()
+        devices: list[TreeDevice] = sorted(
+            [*self._get_devices(), *self._get_unloaded_devices()],
+            key=lambda d: d.node_id,
+        )
         areas = self._get_areas()
         device_tree = self._build_device_tree(devices)
 
@@ -140,7 +149,7 @@ class DevicesPanel:
         if single is not None:
             selected_ids.add(single)
 
-        def _leaf(device: Device) -> int:
+        def _leaf(device: TreeDevice) -> int:
             flags = leaf_flags
             if device.node_id in selected_ids:
                 flags = flags | imgui.TreeNodeFlags_.selected
@@ -151,10 +160,12 @@ class DevicesPanel:
         for _area in areas:
             for _line in self._get_lines(_area.id):
                 for _d in device_tree.get(_area.number, {}).get(_line.number, []):
-                    if not flt or self._device_matches(_d, flt):
+                    if isinstance(_d, Device) and (
+                        not flt or self._device_matches(_d, flt)
+                    ):
                         ordered_ids.append(_d.node_id)
         for _d in self._get_unassigned_devices(devices, areas):
-            if not flt or self._device_matches(_d, flt):
+            if isinstance(_d, Device) and (not flt or self._device_matches(_d, flt)):
                 ordered_ids.append(_d.node_id)
 
         for area in areas:
@@ -195,13 +206,7 @@ class DevicesPanel:
                         self._render_line_drop_target(area, line)
 
                         for device in line_devices:
-                            imgui.tree_node_ex(
-                                self._device_label(device), _leaf(device)
-                            )
-                            if imgui.is_item_clicked():
-                                self._handle_device_click(device, ordered_ids)
-                            self._render_device_context_menu(device)
-                            self._render_device_drag_source(device)
+                            self._render_device_node(device, _leaf, ordered_ids)
                         imgui.tree_pop()
                 imgui.tree_pop()
 
@@ -219,12 +224,41 @@ class DevicesPanel:
                 S.DEVICE_UNASSIGNED.format(count=len(unassigned)), unassigned_flags
             ):
                 for device in unassigned:
-                    imgui.tree_node_ex(self._device_label(device), _leaf(device))
-                    if imgui.is_item_clicked():
-                        self._handle_device_click(device, ordered_ids)
-                    self._render_device_context_menu(device)
-                    self._render_device_drag_source(device)
+                    self._render_device_node(device, _leaf, ordered_ids)
                 imgui.tree_pop()
+
+    def _render_device_node(
+        self,
+        device: TreeDevice,
+        leaf: Callable[[TreeDevice], int],
+        ordered_ids: list[int],
+    ) -> None:
+        if isinstance(device, UnloadedDevice):
+            # Shown like any device, but without an application there is nothing to configure.
+            imgui.push_style_color(imgui.Col_.text, _UNLOADED_COLOR)
+            imgui.tree_node_ex(self._device_label(device), leaf(device))
+            imgui.pop_style_color()
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(S.DEVICE_PRODUCT_DATA_MISSING)
+            self._render_unloaded_device_context_menu(device)
+            return
+        imgui.tree_node_ex(self._device_label(device), leaf(device))
+        if imgui.is_item_clicked():
+            self._handle_device_click(device, ordered_ids)
+        self._render_device_context_menu(device)
+        self._render_device_drag_source(device)
+
+    def _render_unloaded_device_context_menu(self, device: UnloadedDevice) -> None:
+        if imgui.begin_popup_context_item(f"##dev_ctx_{device.node_id}"):
+            if (
+                device.individual_address
+                and imgui.menu_item(S.CONTEXT_COPY_ADDRESS, "", False)[0]
+            ):
+                imgui.set_clipboard_text(device.individual_address)
+            if imgui.menu_item(S.CONTEXT_DELETE, "", False)[0]:
+                self._delete_target_device = device
+                self._open_delete_device_popup = True
+            imgui.end_popup()
 
     def _handle_device_click(self, device: Device, ordered_ids: list[int]) -> None:
         """Selection: plain click = single, Ctrl = toggle, Shift = range (additive with
@@ -294,26 +328,30 @@ class DevicesPanel:
                 imgui.close_current_popup()
             imgui.end_popup()
 
-    def _device_display_name(self, device: Device) -> str:
+    def _device_display_name(self, device: TreeDevice) -> str:
         """Human label for dialogs: name, else product/app name, prefixed with the address."""
-        primary = device.name or getattr(device.app, "name", "") or "?"
+        primary = device.display_name or "?"
         if device.individual_address:
             return f"{device.individual_address} {primary}"
         return primary
 
-    def _device_matches(self, device: Device, flt: str) -> bool:
-        """Case-insensitive match of a device against the filter (name, address, app name)."""
+    def _device_matches(self, device: TreeDevice, flt: str) -> bool:
+        """Case-insensitive match of a device against the filter (name, product, address, app)."""
         if flt in (device.name or "").lower():
+            return True
+        if flt in (device.product_name or "").lower():
             return True
         if flt in (device.individual_address or "").lower():
             return True
+        if isinstance(device, UnloadedDevice):
+            return False
         app_name = getattr(device.app, "name", "") or ""
         return flt in app_name.lower()
 
-    def _device_label(self, device: Device) -> str:
-        # Imported devices are often unnamed; fall back to the application/product name.
-        primary = device.name or getattr(device.app, "name", "") or "?"
-        version = getattr(device.app, "version", "") or ""
+    def _device_label(self, device: TreeDevice) -> str:
+        # Imported devices are often unnamed; fall back to the product/application name.
+        primary = device.display_name or "?"
+        version = "" if isinstance(device, UnloadedDevice) else device.app.version or ""
         ver = f"  V{version}" if version else ""  # app program version, e.g. "V20"
         if device.individual_address:
             return f"{device.individual_address}  {primary}{ver}##dev{device.node_id}"
@@ -467,9 +505,9 @@ class DevicesPanel:
         return max(ln.number for ln in lines) + 1
 
     def _build_device_tree(
-        self, devices: list[Device]
-    ) -> dict[int, dict[int, list[Device]]]:
-        tree: dict[int, dict[int, list[Device]]] = {}
+        self, devices: list[TreeDevice]
+    ) -> dict[int, dict[int, list[TreeDevice]]]:
+        tree: dict[int, dict[int, list[TreeDevice]]] = {}
         for device in devices:
             if not device.individual_address:
                 continue
@@ -488,8 +526,8 @@ class DevicesPanel:
         return tree
 
     def _get_unassigned_devices(
-        self, devices: list[Device], areas: list[Area]
-    ) -> list[Device]:
+        self, devices: list[TreeDevice], areas: list[Area]
+    ) -> list[TreeDevice]:
         area_numbers = {a.number for a in areas}
         area_lines: dict[int, set[int]] = {}
         for area in areas:
@@ -518,7 +556,7 @@ class DevicesPanel:
         if imgui.begin_drag_drop_source():
             self._dragging_device = device
             imgui.set_drag_drop_payload_py_id("DEVICE", device.node_id)
-            imgui.text(device.name)
+            imgui.text(device.display_name)
             imgui.end_drag_drop_source()
 
     def _render_line_drop_target(self, area: Area, line: Line) -> None:

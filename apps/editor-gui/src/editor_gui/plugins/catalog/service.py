@@ -162,6 +162,11 @@ class CatalogService:
         return self._import_knxprod_bytes(data)
 
     @io_guarded(lambda: None)
+    def get_program_application_id(self, program_id: str) -> str | None:
+        """The application id a hardware program loads, whether or not a catalog item lists it."""
+        return self._service.get_program_application_id(program_id)
+
+    @io_guarded(lambda: None)
     def get_application(self, application_id: str) -> Application | None:
         # Localize device labels (parameter/tab/block names) to the current UI language when the
         # .knxprod ships that language; get_locale() returns e.g. "de", matched to "de-DE".

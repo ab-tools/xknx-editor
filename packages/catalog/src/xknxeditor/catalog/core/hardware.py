@@ -148,6 +148,16 @@ def get_hardware_program(
     ).first()
 
 
+def get_program_application_id(db: Session, program_id: str) -> str | None:
+    """The application id a hardware program loads, or ``None`` if the program is unknown.
+
+    Independent of catalog items: a program resolves even when no catalog entry lists it.
+    """
+    return db.scalars(
+        select(HardwareProgram.application_id).where(HardwareProgram.id == program_id)
+    ).first()
+
+
 def get_program_source(db: Session, program_id: str) -> tuple[str, str] | None:
     """Return ``(knxprod_path, manufacturer_id)`` for a hardware program, or ``None``.
 
