@@ -486,9 +486,9 @@ class GroupAddressesPanel:
     def _com_object_names(self) -> dict[int, tuple[str, str, int]]:
         names: dict[int, tuple[str, str, int]] = {}
         for device in self._get_devices():
-            # Imported devices are often unnamed; fall back to the application name (as
-            # the Devices tree does), and prefix the individual address for context.
-            primary = device.name or getattr(device.app, "name", "") or "?"
+            # Imported devices are often unnamed; fall back to the product name (as the
+            # Devices tree does), and prefix the individual address for context.
+            primary = device.display_name or "?"
             ia = device.individual_address
             label = f"{ia}  {primary}" if ia else primary
             for co in device.com_objects:

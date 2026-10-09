@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from editor_gui.concurrency import io_guarded, revision_cached
-from editor_gui.device import Device
+from editor_gui.device import Device, UnloadedDevice
 from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui.history import HistoryEntry
 from editor_gui.settings import config_dir
@@ -326,7 +326,6 @@ class ProjectService:
         self._log: Logger
         self._listeners: dict[str, list[Callable[..., Any]]] = {}
         self._app_cache: dict[str, Application] = {}
-        self._program_to_app: dict[str, str] | None = None
         # Signature of the non-reverted events at open — the baseline the read-only pre-flight
         # compares against, so opening a previously-edited project is not itself "modified".
         self._history_baseline: frozenset[tuple[int, str, str]] = frozenset()
@@ -334,6 +333,7 @@ class ProjectService:
         # GUI show a determinate "opening project" progress bar sized to the project's device count.
         self.build_progress: Callable[[int, int, str], None] | None = None
         self._devices_cache: list[Device] | None = None
+        self._unloaded_devices: list[UnloadedDevice] = []
         self._areas_cache: list[_Area] | None = None
         self._lines_cache: dict[int, list[_Line]] | None = None
         self._ga_cache: list[_GroupAddress] | None = None
@@ -843,7 +843,6 @@ class ProjectService:
         self._selected_node_ids = set()
         self._dynui_lru.clear()
         self._app_cache.clear()
-        self._program_to_app = None
 
     def _bump(self, *, structural: bool = True) -> None:
         """Advance the revision so views refresh. ``structural=False`` for edits that don't change
@@ -884,13 +883,9 @@ class ProjectService:
         cached = self._app_cache.get(program_ref)
         if cached is not None:
             return cached
-        if self._program_to_app is None:
-            self._program_to_app = {
-                p.hardware2program_ref_id: p.application_id
-                for p in self._catalog.get_products()
-                if p.application_id is not None
-            }
-        app_id = self._program_to_app.get(program_ref)
+        # Through the hardware program itself: a program loads its application whether or not a
+        # catalog item lists it.
+        app_id = self._catalog.get_program_application_id(program_ref)
         app = self._catalog.get_application(app_id) if app_id else None
         if app is not None:
             self._app_cache[program_ref] = app
@@ -946,6 +941,7 @@ class ProjectService:
             device = Device(
                 node_id=row.id,
                 name=row.name,
+                product_name=row.product_name or "",
                 app=app,
                 individual_address=ia,
                 description=row.description,
@@ -992,6 +988,7 @@ class ProjectService:
     def devices(self) -> list[Device]:
         if self._devices_cache is None or self._devices_cache_version != self._version:
             devices: list[Device] = []
+            unloaded: list[UnloadedDevice] = []
             if self._pid is not None:
                 rows = list(self._svc.devices(self._pid))
                 total = len(rows)
@@ -1000,7 +997,20 @@ class ProjectService:
                 self._log.debug("building devices", total=total)
                 for i, row in enumerate(rows, start=1):
                     device = self._build_device(row)
-                    if device is not None:
+                    if device is None:
+                        unloaded.append(
+                            UnloadedDevice(
+                                node_id=row.id,
+                                name=row.name or "",
+                                product_name=row.product_name or "",
+                                individual_address=self._svc.individual_address(
+                                    self._pid, row.id
+                                )
+                                or "",
+                                program_ref=row.hardware2program_ref_id,
+                            )
+                        )
+                    else:
                         devices.append(device)
                         # Verbose per-device trace: the build is otherwise a silent gap
                         # between "opening project" and "project opened".
@@ -1026,8 +1036,15 @@ class ProjectService:
                     seconds=round(time.monotonic() - started, 2),
                 )
             self._devices_cache = devices
+            self._unloaded_devices = unloaded
             self._devices_cache_version = self._version
         return self._devices_cache
+
+    @property
+    def unloaded_devices(self) -> list[UnloadedDevice]:
+        """Project devices whose application could not be loaded, shown without parameters."""
+        _ = self.devices
+        return self._unloaded_devices
 
     def find_device_by_node_id(self, node_id: int) -> Device | None:
         return next((d for d in self.devices if d.node_id == node_id), None)
@@ -1499,7 +1516,6 @@ class ProjectService:
         (which acquire it non-blocking and bail otherwise) never see a half-cleared cache or trigger
         the rebuild themselves. The lock is re-entrant, so the ``devices`` read below still works."""
         with self._io_lock:
-            self._program_to_app = None
             self._app_cache.clear()
             self._bump()
             if rebuild:
@@ -1581,7 +1597,6 @@ class ProjectService:
             product_name=product.name,
             manufacturer_name=product.manufacturer_name,
         )
-        self._program_to_app = None
         self._app_cache.clear()
         self._bump()
         updated = self.find_device_by_node_id(device.node_id)
@@ -1616,7 +1631,6 @@ class ProjectService:
         )
         if not products:
             self._catalog.download_online_products([catalog_item_id])
-            self._program_to_app = None
             self._app_cache.clear()
             products = self._catalog.find_products_for_application(
                 manufacturer_id=manufacturer_id,

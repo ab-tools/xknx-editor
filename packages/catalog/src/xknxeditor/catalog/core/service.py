@@ -24,6 +24,7 @@ from xknxeditor.catalog.core.hardware import (
     HardwareFilters,
     get_hardware,
     get_hardware_program,
+    get_program_application_id,
     get_program_source,
     list_hardware,
 )
@@ -92,6 +93,11 @@ class CatalogService:
     def get_application_xml(self, program_id: str) -> tuple[bytes, str] | None:
         with Session(self._engine) as db:
             return get_application_xml(db, program_id)
+
+    def get_program_application_id(self, program_id: str) -> str | None:
+        """The application id a hardware program loads, or ``None``."""
+        with Session(self._engine) as db:
+            return get_program_application_id(db, program_id)
 
     def get_program_source(self, program_id: str) -> tuple[str, str] | None:
         """Return ``(knxprod_path, manufacturer_id)`` for a program id, or ``None``."""

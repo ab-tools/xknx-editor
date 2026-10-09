@@ -175,6 +175,21 @@ def _collect_ui_com_objects(
     return result
 
 
+@dataclass(frozen=True)
+class UnloadedDevice:
+    """A project device whose application could not be loaded (product data missing or broken)."""
+
+    node_id: int
+    name: str
+    product_name: str
+    individual_address: str
+    program_ref: str | None
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.product_name
+
+
 @dataclass
 class Device:
     node_id: int
@@ -182,6 +197,7 @@ class Device:
     app: Application
     individual_address: str
     description: str = ""
+    product_name: str = ""
     com_objects: list[ComObject] = field(default_factory=list[ComObject])
     parameter_instance_refs: list[ParameterInstanceRef] = field(
         default_factory=list, repr=False, compare=False
@@ -219,6 +235,11 @@ class Device:
     param_inputs: dict[str, str] = field(
         default_factory=dict[str, str], repr=False, compare=False, init=False
     )
+
+    @property
+    def display_name(self) -> str:
+        """The device's name, else its product's name, else its application's name."""
+        return self.name or self.product_name or self.app.name
 
     def __post_init__(self) -> None:
         self._ensure_dynamic_ui()
