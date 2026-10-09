@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from xknxeditor.namespaces.intermediate.parameter_instance_ref_t import (
         ParameterInstanceRef,
     )
+    from xknxeditor.prod.parser_v2.calculation import ChangeSet
     from xknxeditor.prod.parser_v2.dynamic import DynamicUI
     from xknxeditor.prod.parser_v2.ui import UiComObject, UiNode
 
@@ -366,21 +368,66 @@ class Device:
         dyn = self._ensure_dynamic_ui()
         if dyn is not None:
             dyn.set_com_obj_instance_ref(ref_id, coir)
-            self._dynamic_ui_dirty = (
-                True  # live edit not in the stored refs -> keep resident
-            )
-            self._cached_visible_cos = None
-            self._cached_rows = None
+            self._touched()
+
+    def _touched(self) -> None:
+        self._dynamic_ui_dirty = (
+            True  # live edit not in the stored refs -> keep resident
+        )
+        self._cached_visible_cos = None
+        self._cached_rows = None
 
     def set_param_value(self, ref_id: str, value: str) -> None:
         dyn = self._ensure_dynamic_ui()
         if dyn is not None:
             dyn.set_parameter_ref(ref_id, value)
-            self._dynamic_ui_dirty = (
-                True  # live edit not in the stored refs -> keep resident
-            )
-            self._cached_visible_cos = None
-            self._cached_rows = None
+            self._touched()
+
+    def change_param_values(
+        self,
+        edits: Sequence[tuple[str, str]],
+        *,
+        validate: bool,
+        skip_invalid: bool = False,
+    ) -> ChangeSet:
+        """Apply edits with their calculations (and validations); all-or-nothing unless
+        ``skip_invalid``, which drops the edits that fail."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is None:
+            return {}
+        done: ChangeSet = {}
+        try:
+            for ref_id, value in edits:
+                try:
+                    changes = dyn.edit_parameter(ref_id, value, validate=validate)
+                except ValueError:
+                    if not skip_invalid:
+                        raise
+                    continue
+                for ref, (old, new) in changes.items():
+                    done[ref] = (done[ref][0] if ref in done else old, new)
+        except BaseException:
+            dyn.apply_parameter_values({ref: old for ref, (old, _) in done.items()})
+            raise
+        finally:
+            self._touched()
+        return {ref: change for ref, change in done.items() if change[0] != change[1]}
+
+    def apply_param_values(self, values: Mapping[str, str | None]) -> None:
+        """Set (``None``: clear) values as they are, without calculations."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is not None:
+            dyn.apply_parameter_values(values)
+            self._touched()
+
+    def recalculate_params(self, ref_ids: Iterable[str]) -> ChangeSet:
+        """Run the calculations depending on ``ref_ids``."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is None:
+            return {}
+        changes = dyn.recalculate(ref_ids)
+        self._touched()
+        return changes
 
     def get_param_value(self, ref_id: str) -> str | None:
         """Current value of a parameter ref in the live dynamic UI (for logging/diagnostics)."""

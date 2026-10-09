@@ -8,6 +8,7 @@ relational tables and reads hand back ORM rows. Installation-scoped calls pass t
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ from xknxeditor.proj.core.events import (
     CreateLine,
     CreateSegment,
     CreateSpace,
+    Event,
     LinkComObject,
     MoveDevice,
     MoveSpace,
@@ -729,6 +731,36 @@ class ProjectService:
                 app_program_id=app_program_id,
             )
         )
+
+    def set_parameters(
+        self,
+        project_id: str,
+        device_id: int,
+        changes: Sequence[tuple[str, str]],
+        com_object_target: list[tuple[str, str | None]] | None = None,
+        app_program_id: str = "",
+        label: str | None = None,
+    ) -> None:
+        """Persist several parameter values, optionally with a com-object reconcile, as one undo step."""
+        events: list[Event] = [
+            SetParameter(device_id=device_id, ref_id=ref_id, value=value)
+            for ref_id, value in changes
+        ]
+        if com_object_target is not None:
+            events.append(
+                SyncDeviceComObjects(
+                    device_id=device_id,
+                    target=[[r, c] for r, c in com_object_target],
+                    app_program_id=app_program_id,
+                )
+            )
+        if not events:
+            return
+        store = self._state(project_id).store
+        if len(events) == 1 and label is None:
+            store.append(events[0])
+        else:
+            store.append(CompositeEvent(events=events, label=label))
 
     def set_parameter_and_sync_com_objects(
         self,

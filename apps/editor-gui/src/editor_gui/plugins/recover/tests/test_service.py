@@ -52,6 +52,7 @@ class _FakeProject:
         self.descriptions: list[tuple[int, str]] = []
         self.segments_for: list[str] = []
         self.pretend_exists = False
+        self.recalculated: tuple[int, list[str]] | None = None
 
     @property
     def devices(self) -> list[_FakeDevice]:
@@ -59,6 +60,10 @@ class _FakeProject:
 
     def find_device_by_address(self, address: str) -> _FakeDevice | None:
         return self._device if self.pretend_exists else None
+
+    def recalculate_params(self, node_id: int, ref_ids: list[str]) -> dict[str, Any]:
+        self.recalculated = (node_id, ref_ids)
+        return {}
 
     def find_or_create_segment_for_address(self, address: str) -> int:
         self.segments_for.append(address)
@@ -162,6 +167,7 @@ def test_apply_to_project_writes_links_flags_and_params(application) -> None:  #
     added = service.apply_to_project()
 
     assert added == 1
+    assert project.recalculated == (7, [ref_id])
     # Device placed on the segment for its address, with the device octet set.
     assert project.segments_for == ["1.1.5"]
     assert project.addresses == [(1, 5)]
