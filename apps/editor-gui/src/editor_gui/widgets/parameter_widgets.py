@@ -602,6 +602,27 @@ def _render_block(
     return popup_request
 
 
+def _grid_pos(cell: str | None) -> tuple[int, int] | None:
+    if not cell:
+        return None
+    try:
+        row, col = cell.split(",")
+        return int(row), int(col)
+    except ValueError:
+        return None
+
+
+def _column_width(spec: str, avail: float) -> float | None:
+    """Pixel width of a Column ``Width`` ("45%" of the block, or plain pixels)."""
+    spec = spec.strip()
+    try:
+        if spec.endswith("%"):
+            return avail * float(spec[:-1]) / 100.0
+        return float(spec)
+    except ValueError:
+        return None
+
+
 def _render_grid_block(
     device: Device,
     block: UiParameterBlock,
@@ -611,38 +632,80 @@ def _render_grid_block(
     differing_refs: frozenset[str] = frozenset(),
     buttons: ButtonActions | None = None,
 ) -> EnumPopupRequest | None:
-    """Lay out parameters positioned by their cell attribute into an imgui grid."""
+    """Lay out parameters, buttons and nested blocks positioned by their cell attribute into a grid."""
     popup_request: EnumPopupRequest | None = None
-    cells_by_pos: dict[tuple[int, int], UiParameter | UiButton] = {}
+    cells_by_pos: dict[tuple[int, int], UiParameter | UiButton | UiParameterBlock] = {}
     labels_by_pos: dict[tuple[int, int], UiSeparator] = {}
     uncelled: list[UiParameter | UiButton] = []
+    uncelled_blocks: list[UiParameterBlock] = []
 
     for node in block.children:
-        if isinstance(node, (UiParameter, UiButton)):
-            if node.cell:
-                try:
-                    r, c = node.cell.split(",")
-                    cells_by_pos[(int(r), int(c))] = node
-                    continue
-                except ValueError:
-                    pass
-            uncelled.append(node)
-        elif isinstance(node, UiSeparator) and node.cell:
-            try:
-                r, c = node.cell.split(",")
-                labels_by_pos[(int(r), int(c))] = node
-            except ValueError:
-                pass
+        if isinstance(node, UiParameter | UiButton | UiParameterBlock):
+            pos = _grid_pos(node.cell)
+            if pos is not None:
+                cells_by_pos[pos] = node
+            elif isinstance(node, UiParameterBlock):
+                uncelled_blocks.append(node)
+            else:
+                uncelled.append(node)
+        elif isinstance(node, UiSeparator):
+            pos = _grid_pos(node.cell)
+            if pos is not None:
+                labels_by_pos[pos] = node
 
-    if not cells_by_pos and not labels_by_pos:
-        return _render_param_table(
+    if cells_by_pos or labels_by_pos:
+        req = _render_grid_cells(
+            device,
+            block,
+            cells_by_pos,
+            labels_by_pos,
+            on_change,
+            deferred_enum,
+            prefix,
+            differing_refs,
+            buttons,
+        )
+        if req is not None:
+            popup_request = req
+
+    if uncelled:
+        req = _render_param_table(
             device, uncelled, on_change, deferred_enum, prefix, differing_refs, buttons
         )
+        if req is not None:
+            popup_request = req
+    for nested in uncelled_blocks:
+        req = _render_block(
+            device,
+            nested,
+            on_change,
+            deferred_enum,
+            prefix,
+            "",
+            differing_refs,
+            buttons,
+        )
+        if req is not None:
+            popup_request = req
 
-    all_rows = {r for r, _ in cells_by_pos} | {r for r, _ in labels_by_pos}
-    all_cols = {c for _, c in cells_by_pos} | {c for _, c in labels_by_pos}
-    max_row = max(all_rows, default=1)
-    max_col = max(all_cols, default=1)
+    return popup_request
+
+
+def _render_grid_cells(
+    device: Device,
+    block: UiParameterBlock,
+    cells_by_pos: dict[tuple[int, int], UiParameter | UiButton | UiParameterBlock],
+    labels_by_pos: dict[tuple[int, int], UiSeparator],
+    on_change: Callable[[Device, str, str], None],
+    deferred_enum: bool,
+    prefix: str,
+    differing_refs: frozenset[str],
+    buttons: ButtonActions | None,
+) -> EnumPopupRequest | None:
+    popup_request: EnumPopupRequest | None = None
+    occupied = set(cells_by_pos) | set(labels_by_pos)
+    max_row = max((r for r, _ in occupied), default=1)
+    max_col = max((c for _, c in occupied), default=1)
 
     is_table = block.layout == ParameterBlockLayout.TABLE
     table_flags = (
@@ -651,82 +714,108 @@ def _render_grid_block(
     if is_table:
         table_flags |= imgui.TableFlags_.borders | imgui.TableFlags_.row_bg
 
-    has_row_labels = bool(block.row_labels)
-    has_col_headers = bool(block.column_headers)
+    has_row_labels = any(block.row_labels)
+    has_col_headers = any(block.column_headers)
     col_offset = 1 if has_row_labels else 0
-    declared_cols = max(max_col, len(block.column_headers))
+    declared_cols = max(max_col, len(block.column_headers), len(block.column_widths))
     total_cols = declared_cols + col_offset
+    avail = imgui.get_content_region_avail().x
 
-    if imgui.begin_table(f"##grid_{prefix}", total_cols, table_flags):
-        if is_table and (has_row_labels or has_col_headers):
-            if has_row_labels:
-                imgui.table_setup_column(block.text or block.name or "")
-            for header in block.column_headers:
-                imgui.table_setup_column(header)
-            for _ in range(declared_cols - len(block.column_headers)):
-                imgui.table_setup_column("")
-            imgui.table_headers_row()
-        elif is_table:
-            imgui.table_headers_row()
-        for row in range(1, max_row + 1):
-            imgui.table_next_row()
-            if has_row_labels:
-                imgui.table_set_column_index(0)
-                label = (
-                    block.row_labels[row - 1] if row - 1 < len(block.row_labels) else ""
-                )
-                imgui.text_disabled(label)
-            for col in range(1, max_col + 1):
-                imgui.table_set_column_index(col - 1 + col_offset)
-                param = cells_by_pos.get((row, col))
-                sep = labels_by_pos.get((row, col))
-                if isinstance(param, UiButton):
-                    _render_button(device, param, prefix, buttons)
-                elif param is not None:
-                    imgui.set_next_item_width(-1)
-                    widget_id = f"{device.node_id}_{param.ref_id}"
-                    # GRID/TABLE cells carry no label to tint, so mark a changed value by tinting
-                    # the widget's own text (combo preview / input), matching the table view.
-                    changed = param.value != param.default_value
-                    if changed:
-                        imgui.push_style_color(imgui.Col_.text, _CHANGED_COLOR)
-                    read_only = param.access == Access.READ
-                    imgui.begin_disabled(read_only)
-                    req = _render_device_param(
-                        device,
-                        param,
-                        widget_id,
-                        lambda v, d=device, p=param.ref_id: on_change(d, p, v),
-                        deferred_enum=deferred_enum,
-                        differs=param.ref_id in differing_refs,
-                    )
-                    imgui.end_disabled()
-                    _track_help(param.help_context)
-                    if changed:
-                        imgui.pop_style_color()
-                        if not read_only and imgui.begin_popup_context_item(
-                            f"##reset_{widget_id}"
-                        ):
-                            if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
-                                on_change(device, param.ref_id, param.default_value)
-                            imgui.end_popup()
-                    if req is not None:
-                        popup_request = EnumPopupRequest(device=device, param=req.param)
-                elif sep is not None:
-                    if sep.hint is None and sep.text:
-                        imgui.text_disabled(sep.text)
-                    else:
-                        _render_separator(sep)
-        imgui.end_table()
-
-    if uncelled:
-        req = _render_param_table(
-            device, uncelled, on_change, deferred_enum, prefix, differing_refs, buttons
+    if not imgui.begin_table(f"##grid_{prefix}", total_cols, table_flags):
+        return None
+    if has_row_labels:
+        imgui.table_setup_column("", imgui.TableColumnFlags_.width_stretch, 1.0)
+    for col in range(declared_cols):
+        header = block.column_headers[col] if col < len(block.column_headers) else ""
+        width = (
+            _column_width(block.column_widths[col], avail)
+            if col < len(block.column_widths)
+            else None
         )
-        if req is not None:
-            popup_request = req
-
+        if width is not None:
+            imgui.table_setup_column(header, imgui.TableColumnFlags_.width_fixed, width)
+        else:
+            imgui.table_setup_column(header, imgui.TableColumnFlags_.width_stretch, 1.0)
+    if has_col_headers:
+        imgui.table_headers_row()
+    for row in range(1, max_row + 1):
+        if row in block.collapsed_rows and not any(r == row for r, _ in occupied):
+            continue
+        imgui.table_next_row()
+        if has_row_labels:
+            imgui.table_set_column_index(0)
+            label = block.row_labels[row - 1] if row - 1 < len(block.row_labels) else ""
+            imgui.text_disabled(label)
+        for col in range(1, max_col + 1):
+            imgui.table_set_column_index(col - 1 + col_offset)
+            node = cells_by_pos.get((row, col))
+            sep = labels_by_pos.get((row, col))
+            req = None
+            if isinstance(node, UiParameterBlock):
+                imgui.push_id(f"{row},{col}")
+                req = _render_block(
+                    device,
+                    node,
+                    on_change,
+                    deferred_enum,
+                    prefix,
+                    "",
+                    differing_refs,
+                    buttons,
+                )
+                imgui.pop_id()
+            elif isinstance(node, UiButton):
+                _render_button(device, node, prefix, buttons)
+            elif node is not None:
+                req = _render_grid_param(
+                    device, node, on_change, deferred_enum, differing_refs
+                )
+            elif sep is not None:
+                if sep.hint is None and sep.text:
+                    imgui.text_disabled(sep.text)
+                else:
+                    _render_separator(sep)
+            if req is not None:
+                popup_request = req
+    imgui.end_table()
     return popup_request
+
+
+def _render_grid_param(
+    device: Device,
+    param: UiParameter,
+    on_change: Callable[[Device, str, str], None],
+    deferred_enum: bool,
+    differing_refs: frozenset[str],
+) -> EnumPopupRequest | None:
+    imgui.set_next_item_width(-1)
+    widget_id = f"{device.node_id}_{param.ref_id}"
+    # GRID/TABLE cells carry no label to tint, so mark a changed value by tinting
+    # the widget's own text (combo preview / input), matching the table view.
+    changed = param.value != param.default_value
+    if changed:
+        imgui.push_style_color(imgui.Col_.text, _CHANGED_COLOR)
+    read_only = param.access == Access.READ
+    imgui.begin_disabled(read_only)
+    req = _render_device_param(
+        device,
+        param,
+        widget_id,
+        lambda v, d=device, p=param.ref_id: on_change(d, p, v),
+        deferred_enum=deferred_enum,
+        differs=param.ref_id in differing_refs,
+    )
+    imgui.end_disabled()
+    _track_help(param.help_context)
+    if changed:
+        imgui.pop_style_color()
+        if not read_only and imgui.begin_popup_context_item(f"##reset_{widget_id}"):
+            if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
+                on_change(device, param.ref_id, param.default_value)
+            imgui.end_popup()
+    if req is not None:
+        return EnumPopupRequest(device=device, param=req.param)
+    return None
 
 
 def _render_param_table(
