@@ -68,6 +68,9 @@ function checkModule(input, changed, value) { return input.x &lt; 50 ? true : "x
           </Static>
           <ModuleDefs>
             <ModuleDef Id="M-00FA_A-0001-01-0000_MD-1" Name="Mod">
+              <Arguments>
+                <Argument Id="M-00FA_A-0001-01-0000_MD-1_A-1" Name="Ch" />
+              </Arguments>
               <Static>
                 <Parameters>
                   <Parameter Id="M-00FA_A-0001-01-0000_MD-1_P-1" Name="X" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="X" Value="0" />
@@ -90,6 +93,7 @@ function checkModule(input, changed, value) { return input.x &lt; 50 ? true : "x
                 <ParameterBlock Id="M-00FA_A-0001-01-0000_MD-1_PB-1" Text="Mod">
                   <ParameterRefRef RefId="M-00FA_A-0001-01-0000_MD-1_P-1_R-1" />
                   <ParameterRefRef RefId="M-00FA_A-0001-01-0000_MD-1_P-2_R-2" />
+                  <Button Id="M-00FA_A-0001-01-0000_MD-1_B-1" Text="Channel {{Ch}}" EventHandler="moduleButton" EventHandlerParameters="{&quot;ch&quot;: {{Ch}}}" />
                 </ParameterBlock>
               </Dynamic>
             </ModuleDef>
@@ -98,9 +102,13 @@ function checkModule(input, changed, value) { return input.x &lt; 50 ? true : "x
             <ChannelIndependentBlock>
               <ParameterBlock Id="M-00FA_A-0001-01-0000_PB-1" Text="Main">
                 <ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-1_R-1" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-2_R-2" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-3_R-3" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-4_R-4" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-5_R-5" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-6_R-6" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-7_R-7" />
+                <Button Id="M-00FA_A-0001-01-0000_B-1" Text="Run" EventHandler="offlineButton" EventHandlerParameters="{&quot;n&quot;: 2}" />
+                <Button Id="M-00FA_A-0001-01-0000_B-2" Text="Online" EventHandler="onlineButton" EventHandlerOnline="ConnectionOriented" />
+                <Button Id="M-00FA_A-0001-01-0000_B-3" Text="Hidden" Access="None" EventHandler="offlineButton" />
+                <Button Id="M-00FA_A-0001-01-0000_B-4" Text="Label {{0}}" Access="Read" TextParameterRefId="M-00FA_A-0001-01-0000_P-6_R-6" EventHandler="offlineButton" />
               </ParameterBlock>
-              <Module Id="M-00FA_A-0001-01-0000_MD-1_M-1" RefId="M-00FA_A-0001-01-0000_MD-1" Text="M1" />
-              <Module Id="M-00FA_A-0001-01-0000_MD-1_M-2" RefId="M-00FA_A-0001-01-0000_MD-1" Text="M2" />
+              <Module Id="M-00FA_A-0001-01-0000_MD-1_M-1" RefId="M-00FA_A-0001-01-0000_MD-1" Name="M1"><NumericArg RefId="M-00FA_A-0001-01-0000_MD-1_A-1" Value="1" /></Module>
+              <Module Id="M-00FA_A-0001-01-0000_MD-1_M-2" RefId="M-00FA_A-0001-01-0000_MD-1" Name="M2"><NumericArg RefId="M-00FA_A-0001-01-0000_MD-1_A-1" Value="2" /></Module>
             </ChannelIndependentBlock>
           </Dynamic>
         </ApplicationProgram>

@@ -1668,5 +1668,39 @@ class ProjectStrings:
     def HISTORY_LINE_RENAME(self) -> str:
         return _("Line: {old} -> {new}")
 
+    @property
+    def BUTTON_NEEDS_ADDRESS_LOADED(self) -> str:
+        return _(
+            "This action can only be performed when the individual address of the device is already downloaded."
+        )
+
+    @property
+    def BUTTON_EXECUTED(self) -> str:
+        return _("Button {0} executed.")
+
+    @property
+    def BUTTON_DEVICE_BUSY(self) -> str:
+        return _("A parameter script is running for this device.")
+
+    @property
+    def BUTTON_NO_VALID_ADDRESS(self) -> str:
+        return _("The Device has no valid address or is not linked to an area or line.")
+
+    @property
+    def SCRIPT_OPERATION(self) -> str:
+        return _("Parameter Script")
+
+    @property
+    def SCRIPT_RUNNING(self) -> str:
+        return _("Executing Script")
+
+    @property
+    def SCRIPT_NOT_RESPONDING(self) -> str:
+        return _("Script not responding")
+
+    @property
+    def SCRIPT_FORCE_STOP(self) -> str:
+        return _("Force stop")
+
 
 S = ProjectStrings()

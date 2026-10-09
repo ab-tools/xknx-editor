@@ -12,6 +12,7 @@ from xknxeditor.namespaces.intermediate.parameter_block_layout_t import (
     ParameterBlockLayout,
 )
 from xknxeditor.prod.parser_v2.ui import (
+    UiButton,
     UiComObject,
     UiNode,
     UiParameter,
@@ -31,6 +32,36 @@ from xknxeditor.prod.parser_v2.ui.parameter import (
 # Parameters changed from their default are tinted to stand out.
 _CHANGED_COLOR = imgui.ImVec4(0.36, 0.71, 1.0, 1.0)
 _ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
+
+
+@dataclass(frozen=True)
+class ButtonActions:
+    """Callbacks for Button elements: click, enabled state with tooltip, and last error."""
+
+    on_click: Callable[[Device, UiButton], None]
+    state: Callable[[Device, UiButton], tuple[bool, str | None]]
+    error: Callable[[Device, UiButton], str | None]
+
+
+def _render_button(
+    device: Device, button: UiButton, prefix: str, buttons: ButtonActions | None
+) -> None:
+    enabled, tooltip = (
+        buttons.state(device, button) if buttons is not None else (False, None)
+    )
+    enabled = enabled and not button.read_only
+    imgui.begin_disabled(not enabled)
+    clicked = imgui.button(f"{button.text}###btn_{prefix}_{button.id}")
+    imgui.end_disabled()
+    if tooltip and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+        imgui.set_tooltip(tooltip)
+    if clicked and enabled and buttons is not None:
+        buttons.on_click(device, button)
+    error = buttons.error(device, button) if buttons is not None else None
+    if error:
+        imgui.push_style_color(imgui.Col_.text, _ERROR_COLOR)
+        imgui.text_wrapped(error)
+        imgui.pop_style_color()
 
 
 def _render_param_error(device: Device, ref_id: str) -> None:
@@ -290,6 +321,8 @@ def _node_matches(node: UiNode, needle: str) -> bool:
     """Whether ``node`` or any descendant has a label containing ``needle`` (lowercased)."""
     if isinstance(node, UiParameter):
         return needle in node.label.lower()
+    if isinstance(node, UiButton):
+        return needle in node.text.lower()
     if isinstance(node, (UiTab, UiParameterBlock)):
         label = (
             getattr(node, "text", None) or getattr(node, "name", None) or ""
@@ -326,6 +359,7 @@ def render_ui_tree(
     deferred_enum: bool = False,
     filter_text: str = "",
     differing_refs: frozenset[str] = frozenset(),
+    buttons: ButtonActions | None = None,
 ) -> EnumPopupRequest | None:
     """Tab-bar renderer with per-tab filter and multi-device diff markers."""
     if not nodes:
@@ -351,6 +385,7 @@ def render_ui_tree(
                         f"{device.node_id}_{tab.id}",
                         needle,
                         differing_refs,
+                        buttons,
                     )
                     if req is not None:
                         popup_request = req
@@ -365,6 +400,7 @@ def render_ui_tree(
             str(device.node_id),
             needle,
             differing_refs,
+            buttons,
         )
         if req is not None:
             popup_request = req
@@ -379,9 +415,10 @@ def _render_children(
     prefix: str,
     needle: str = "",
     differing_refs: frozenset[str] = frozenset(),
+    buttons: ButtonActions | None = None,
 ) -> EnumPopupRequest | None:
     popup_request: EnumPopupRequest | None = None
-    pending_params: list[UiParameter] = []
+    pending_params: list[UiParameter | UiButton] = []
     table_idx = 0
 
     def flush() -> None:
@@ -395,6 +432,7 @@ def _render_children(
             deferred_enum,
             f"{prefix}_{table_idx}",
             differing_refs,
+            buttons,
         )
         table_idx += 1
         if req is not None:
@@ -410,7 +448,14 @@ def _render_children(
                 continue
             flush()
             req = _render_block(
-                device, node, on_change, deferred_enum, prefix, needle, differing_refs
+                device,
+                node,
+                on_change,
+                deferred_enum,
+                prefix,
+                needle,
+                differing_refs,
+                buttons,
             )
             if req is not None:
                 popup_request = req
@@ -419,6 +464,9 @@ def _render_children(
                 continue  # separators are noise while filtering
             flush()
             _render_separator(node)
+        elif isinstance(node, UiButton):
+            if not needle or needle in node.text.lower():
+                pending_params.append(node)
         elif isinstance(node, UiComObject):
             pass
 
@@ -434,12 +482,19 @@ def _render_block(
     prefix: str,
     needle: str = "",
     differing_refs: frozenset[str] = frozenset(),
+    buttons: ButtonActions | None = None,
 ) -> EnumPopupRequest | None:
     block_prefix = f"{prefix}_{block.id}"
 
     if block.layout in (ParameterBlockLayout.GRID, ParameterBlockLayout.TABLE):
         return _render_grid_block(
-            device, block, on_change, deferred_enum, block_prefix, differing_refs
+            device,
+            block,
+            on_change,
+            deferred_enum,
+            block_prefix,
+            differing_refs,
+            buttons,
         )
 
     if block.inline:
@@ -451,6 +506,7 @@ def _render_block(
             block_prefix,
             needle,
             differing_refs,
+            buttons,
         )
 
     label = _instance_label(block.text or block.name or block.id, block.id)
@@ -472,6 +528,7 @@ def _render_block(
             block_prefix,
             needle,
             differing_refs,
+            buttons,
         )
         if req is not None:
             popup_request = req
@@ -486,15 +543,16 @@ def _render_grid_block(
     deferred_enum: bool,
     prefix: str,
     differing_refs: frozenset[str] = frozenset(),
+    buttons: ButtonActions | None = None,
 ) -> EnumPopupRequest | None:
     """Lay out parameters positioned by their cell attribute into an imgui grid."""
     popup_request: EnumPopupRequest | None = None
-    cells_by_pos: dict[tuple[int, int], UiParameter] = {}
+    cells_by_pos: dict[tuple[int, int], UiParameter | UiButton] = {}
     labels_by_pos: dict[tuple[int, int], str] = {}
-    uncelled: list[UiParameter] = []
+    uncelled: list[UiParameter | UiButton] = []
 
     for node in block.children:
-        if isinstance(node, UiParameter):
+        if isinstance(node, (UiParameter, UiButton)):
             if node.cell:
                 try:
                     r, c = node.cell.split(",")
@@ -512,7 +570,7 @@ def _render_grid_block(
 
     if not cells_by_pos and not labels_by_pos:
         return _render_param_table(
-            device, uncelled, on_change, deferred_enum, prefix, differing_refs
+            device, uncelled, on_change, deferred_enum, prefix, differing_refs, buttons
         )
 
     all_rows = {r for r, _ in cells_by_pos} | {r for r, _ in labels_by_pos}
@@ -556,7 +614,9 @@ def _render_grid_block(
                 imgui.table_set_column_index(col - 1 + col_offset)
                 param = cells_by_pos.get((row, col))
                 label = labels_by_pos.get((row, col))
-                if param is not None:
+                if isinstance(param, UiButton):
+                    _render_button(device, param, prefix, buttons)
+                elif param is not None:
                     imgui.set_next_item_width(-1)
                     widget_id = f"{device.node_id}_{param.ref_id}"
                     # GRID/TABLE cells carry no label to tint, so mark a changed value by tinting
@@ -586,7 +646,7 @@ def _render_grid_block(
 
     if uncelled:
         req = _render_param_table(
-            device, uncelled, on_change, deferred_enum, prefix, differing_refs
+            device, uncelled, on_change, deferred_enum, prefix, differing_refs, buttons
         )
         if req is not None:
             popup_request = req
@@ -596,11 +656,12 @@ def _render_grid_block(
 
 def _render_param_table(
     device: Device,
-    params: list[UiParameter],
+    params: list[UiParameter | UiButton],
     on_change: Callable[[Device, str, str], None],
     deferred_enum: bool,
     prefix: str,
     differing_refs: frozenset[str] = frozenset(),
+    buttons: ButtonActions | None = None,
 ) -> EnumPopupRequest | None:
     if not params:
         return None
@@ -615,6 +676,10 @@ def _render_param_table(
         imgui.table_setup_column("Value", imgui.TableColumnFlags_.width_stretch, 1.0)
         for param in params:
             imgui.table_next_row()
+            if isinstance(param, UiButton):
+                imgui.table_set_column_index(1)
+                _render_button(device, param, prefix, buttons)
+                continue
             imgui.table_set_column_index(0)
             indent = param.indent_level * 12.0
             if indent > 0:
