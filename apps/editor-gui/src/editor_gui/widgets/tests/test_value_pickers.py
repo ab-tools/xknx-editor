@@ -31,21 +31,36 @@ def test_shade_lightens_and_darkens() -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "year_shown", "date"),
+    ("text", "year_shown", "pattern", "date"),
     [
-        ("2026-10-09", True, "2026-10-09"),
-        ("2026-2-3", True, "2026-02-03"),
-        ("9.10.2026", True, "2026-10-09"),
-        ("2026-02-30", True, None),
-        ("10-09", True, None),
-        ("10-09", False, "2020-10-09"),
-        ("nonsense", True, None),
+        ("2026-10-09", True, "yyyy-MM-dd", "2026-10-09"),
+        ("2026-2-3", True, "yyyy-MM-dd", "2026-02-03"),
+        ("9.10.2026", True, "dd.MM.yyyy", "2026-10-09"),
+        ("2026-10-09", True, "dd.MM.yyyy", "2026-10-09"),
+        ("10/9/2026", True, "M/d/yyyy", "2026-10-09"),
+        ("30.02.2026", True, "dd.MM.yyyy", None),
+        ("9.10", True, "dd.MM.yyyy", None),
+        ("9.10", False, "dd.MM.yyyy", "2020-10-09"),
+        ("10-09", False, "yyyy-MM-dd", "2020-10-09"),
+        ("nonsense", True, "dd.MM.yyyy", None),
     ],
 )
-def test_parse_date(text: str, year_shown: bool, date: str | None) -> None:
-    assert parse_date(text, year_shown, "2020-01-01") == date
+def test_parse_date(
+    text: str, year_shown: bool, pattern: str, date: str | None
+) -> None:
+    assert parse_date(text, year_shown, "2020-01-01", pattern) == date
 
 
-def test_format_date_hides_the_year_when_the_type_does() -> None:
-    assert format_date("2026-10-09", True) == "2026-10-09"
-    assert format_date("2026-10-09", False) == "10-09"
+@pytest.mark.parametrize(
+    ("year_shown", "pattern", "shown"),
+    [
+        (True, "yyyy-MM-dd", "2026-01-09"),
+        (False, "yyyy-MM-dd", "01-09"),
+        (True, "dd.MM.yyyy", "09.01.2026"),
+        (False, "dd.MM.yyyy", "09.01"),
+        (True, "M/d/yyyy", "1/9/2026"),
+        (False, "d-M-yyyy", "9-1"),
+    ],
+)
+def test_format_date(year_shown: bool, pattern: str, shown: str) -> None:
+    assert format_date("2026-01-09", year_shown, pattern) == shown

@@ -1,6 +1,6 @@
 """Colour and date parameter fields with a picker popup next to the text entry.
 
-A colour is stored as ``#RRGGBB``, a date as ``YYYY-MM-DD``.
+A colour is stored as ``#RRGGBB``, a date as ``YYYY-MM-DD`` and shown in a given pattern.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ import calendar
 import datetime
 import re
 from collections.abc import Callable
+from functools import cache
 
 from imgui_bundle import imgui
 
@@ -46,9 +47,10 @@ _WHITE_SHADES = (-0.05, -0.15, -0.25, -0.35, -0.5)
 _BLACK_SHADES = (0.5, 0.35, 0.25, 0.15, 0.05)
 
 _HEX = re.compile(r"#?([0-9A-Fa-f]{6})")
-_ISO_DATE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
-_DOTTED_DATE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})")
-_MONTH_DAY = re.compile(r"(\d{1,2})-(\d{1,2})")
+ISO_DATE = "yyyy-MM-dd"
+_DATE_TOKEN = re.compile(r"yyyy|MM|M|dd|d")
+# The year of a date pattern with the separator next to it.
+_YEAR_PART = re.compile(r"[^dMy]?yyyy$|^yyyy[^dMy]?")
 
 
 def parse_color(text: str) -> str | None:
@@ -67,33 +69,67 @@ def shade(rgb: int, amount: float) -> int:
     return (shaded[0] << 16) | (shaded[1] << 8) | shaded[2]
 
 
-def parse_date(text: str, year_shown: bool, stored: str) -> str | None:
-    """``YYYY-MM-DD`` for an entered date; None if invalid.
+def parse_date(
+    text: str, year_shown: bool, stored: str, pattern: str = ISO_DATE
+) -> str | None:
+    """``YYYY-MM-DD`` for a date entered in ``pattern`` or as ``YYYY-MM-DD``; None if invalid.
 
-    Accepts ``YYYY-MM-DD`` and ``DD.MM.YYYY``; without a shown year ``MM-DD``, keeping the
-    year of ``stored``.
+    Without a shown year the year is not entered and the year of ``stored`` is kept.
     """
     text = text.strip()
-    if match := _ISO_DATE.fullmatch(text):
-        year, month, day = (int(g) for g in match.groups())
-    elif match := _DOTTED_DATE.fullmatch(text):
-        day, month, year = (int(g) for g in match.groups())
-    elif not year_shown and (match := _MONTH_DAY.fullmatch(text)):
-        month, day = (int(g) for g in match.groups())
-        year = _date_of(stored).year
-    else:
-        return None
+    for candidate in (pattern, ISO_DATE):
+        match = _date_regex(_shown_pattern(candidate, year_shown)).fullmatch(text)
+        if match is None:
+            continue
+        year = int(match["y"]) if match["y"] else _date_of(stored).year
+        try:
+            return datetime.date(year, int(match["m"]), int(match["d"])).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def format_date(stored: str, year_shown: bool, pattern: str = ISO_DATE) -> str:
+    """The stored ``YYYY-MM-DD`` date in ``pattern`` (``yyyy``, ``MM``/``M``, ``dd``/``d``);
+    without a shown year the year and its separator are left out."""
     try:
-        return datetime.date(year, month, day).isoformat()
+        date = datetime.date.fromisoformat(stored)
     except ValueError:
-        return None
+        return stored
+    fields = {
+        "yyyy": f"{date.year:04d}",
+        "MM": f"{date.month:02d}",
+        "M": str(date.month),
+        "dd": f"{date.day:02d}",
+        "d": str(date.day),
+    }
+    return _DATE_TOKEN.sub(lambda m: fields[m[0]], _shown_pattern(pattern, year_shown))
 
 
-def format_date(stored: str, year_shown: bool) -> str:
-    """The stored date as shown: ``YYYY-MM-DD``, or ``MM-DD`` when the type hides the year."""
-    if not year_shown and _ISO_DATE.fullmatch(stored):
-        return stored[5:]
-    return stored
+def _shown_pattern(pattern: str, year_shown: bool) -> str:
+    return pattern if year_shown else _YEAR_PART.sub("", pattern)
+
+
+@cache
+def _date_regex(pattern: str) -> re.Pattern[str]:
+    groups = {
+        "yyyy": r"(?P<y>\d{4})",
+        "MM": r"(?P<m>\d{1,2})",
+        "M": r"(?P<m>\d{1,2})",
+        "dd": r"(?P<d>\d{1,2})",
+        "d": r"(?P<d>\d{1,2})",
+    }
+    parts: list[str] = []
+    position = 0
+    for token in _DATE_TOKEN.finditer(pattern):
+        parts.append(re.escape(pattern[position : token.start()]))
+        parts.append(groups[token[0]])
+        position = token.end()
+    parts.append(re.escape(pattern[position:]))
+    regex = "".join(parts)
+    if "(?P<y>" not in regex:
+        regex += "(?P<y>)"
+    return re.compile(regex)
 
 
 def render_color_param(
@@ -199,19 +235,20 @@ def render_date_param(
     year_shown: bool,
     on_change: Callable[[str], None],
     differs: bool,
+    pattern: str = ISO_DATE,
 ) -> None:
     """A date entry with a button that opens a calendar."""
     width = imgui.calc_item_width()
     button = imgui.calc_text_size("...").x + 2 * imgui.get_style().frame_padding.x
     spacing = imgui.get_style().item_inner_spacing.x
     imgui.set_next_item_width(max(px(60.0), width - button - spacing))
-    shown = "" if differs else format_date(value, year_shown)
+    shown = "" if differs else format_date(value, year_shown, pattern)
     if differs:
         _, text = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
     else:
         _, text = imgui.input_text(f"##{widget_id}", shown)
     if imgui.is_item_deactivated_after_edit() and text != shown:
-        date = parse_date(text, year_shown, value)
+        date = parse_date(text, year_shown, value, pattern)
         if date is not None:
             on_change(date)
     imgui.same_line(0, spacing)

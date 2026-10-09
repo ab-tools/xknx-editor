@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from imgui_bundle import imgui
 
 from editor_gui.device import Device
+from editor_gui.regional import regional_format
 from editor_gui.widgets.dpi import px
 from editor_gui.widgets.float_format import format_float, parse_float, step_float
 from editor_gui.widgets.strings import S
@@ -135,7 +136,9 @@ def _value_display(param: UiParameter, value: str) -> str:
     if isinstance(param.widget, FloatWidget | FloatSliderWidget) and value:
         return _float_display(param.widget, value)
     if isinstance(param.widget, DateWidget):
-        return format_date(value, param.widget.display_the_year)
+        return format_date(
+            value, param.widget.display_the_year, regional_format().short_date
+        )
     return value
 
 
@@ -196,7 +199,12 @@ def render_param_widget(
             render_color_param(widget_id, param.value, on_change, differs)
         case DateWidget() as w:
             render_date_param(
-                widget_id, param.value, w.display_the_year, on_change, differs
+                widget_id,
+                param.value,
+                w.display_the_year,
+                on_change,
+                differs,
+                regional_format().short_date,
             )
         case CheckBoxWidget():
             if differs:
@@ -255,8 +263,14 @@ def _render_text_param(
 
 
 def _float_display(widget: FloatWidget | FloatSliderWidget, value: str) -> str:
+    regional = regional_format()
     return format_float(
-        value, widget.display_format, widget.display_factor, widget.display_offset
+        value,
+        widget.display_format,
+        widget.display_factor,
+        widget.display_offset,
+        decimal=regional.decimal,
+        group=regional.group,
     )
 
 
@@ -288,8 +302,15 @@ def _render_float_param(
         return
     if not edited or text == shown:
         return
+    regional = regional_format()
     stored = parse_float(
-        text, widget.min, widget.max, widget.display_factor, widget.display_offset
+        text,
+        widget.min,
+        widget.max,
+        widget.display_factor,
+        widget.display_offset,
+        decimal=regional.decimal,
+        group=regional.group,
     )
     if stored is not None:
         on_change(stored)

@@ -80,3 +80,13 @@ def test_step(
     stored: str, steps: int, increment: float | None, result: str | None
 ) -> None:
     assert step_float(stored, steps, increment, -90, 90) == result
+
+
+def test_regional_separators() -> None:
+    german = {"decimal": ",", "group": "."}
+    assert format_float("5.011537700000000E+001", **german) == "50,115377"
+    assert format_float("1234567.891", "#,##0.00", **german) == "1.234.567,89"
+    assert parse_float("50,115377", **german) == "50.115377"
+    assert parse_float("1.234,5", **german) == "1234.5"
+    assert parse_float("50.115377", **german) == "50.115377"
+    assert parse_float("1.234.567", **german) is None

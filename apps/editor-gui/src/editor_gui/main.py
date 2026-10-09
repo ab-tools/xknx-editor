@@ -2806,9 +2806,11 @@ def main() -> None:
 
 
 def _main() -> None:
-    # A persisted choice (Language menu) wins over the auto-detected OS locale.
+    # Applies the OS locale, whose regional formats are used in every UI language. A persisted
+    # choice (Language menu) wins over the auto-detected OS language.
+    os_language = _detect_locale()
     saved = load_settings("app").get("locale")
-    set_locale(saved if isinstance(saved, str) and saved else _detect_locale())
+    set_locale(saved if isinstance(saved, str) and saved else os_language)
 
     # App icon: hello_imgui loads assets/app_settings/icon.png as the window/app icon.
     hello_imgui.set_assets_folder(str(Path(__file__).parent / "assets"))

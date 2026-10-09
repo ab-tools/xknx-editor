@@ -2,7 +2,7 @@
 
 A value is shown with the parameter type's ``DisplayFormat`` (a custom numeric format such as
 ``0.000``, ``#,##0.00`` or ``0.00E+00``), otherwise with up to 15 significant digits, after
-applying the type's display factor and offset.
+applying the type's display factor and offset, using the given decimal and group separators.
 """
 
 from __future__ import annotations
@@ -21,6 +21,9 @@ def format_float(
     display_format: str | None = None,
     display_factor: float | None = None,
     display_offset: float | None = None,
+    *,
+    decimal: str = ".",
+    group: str = ",",
 ) -> str:
     """The stored value as shown; text that is not a number is returned unchanged."""
     try:
@@ -31,9 +34,8 @@ def format_float(
         return stored
     value = value * (display_factor or 1.0) + (display_offset or 0.0)
     match = _FORMAT.fullmatch(display_format) if display_format else None
-    if match is None:
-        return _general(value)
-    return _custom(value, match)
+    text = _general(value) if match is None else _custom(value, match)
+    return text.translate(str.maketrans({".": decimal, ",": group}))
 
 
 def parse_float(
@@ -42,10 +44,20 @@ def parse_float(
     maximum: float | None = None,
     display_factor: float | None = None,
     display_offset: float | None = None,
+    *,
+    decimal: str = ".",
+    group: str = ",",
 ) -> str | None:
-    """The value to store for ``text`` as entered, clamped to the range; None if not a number."""
-    cleaned = text.strip().replace(" ", "")
-    if "," in cleaned and "." not in cleaned:
+    """The value to store for ``text`` as entered, clamped to the range; None if not a number.
+
+    With the decimal separator present, group separators are ignored; without it, a point or a
+    comma is taken as the decimal separator."""
+    cleaned = text.strip().replace(" ", "").replace("\u00a0", "")
+    if decimal in cleaned:
+        if group != decimal:
+            cleaned = cleaned.replace(group, "")
+        cleaned = cleaned.replace(decimal, ".")
+    else:
         cleaned = cleaned.replace(",", ".")
     try:
         shown = float(cleaned)
