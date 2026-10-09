@@ -1,6 +1,7 @@
 import datetime
 import functools
 import threading
+import zipfile
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,8 @@ from editor_gui.plugins.project.ui.preflight_result import PreflightResultWindow
 from editor_gui.plugins.project.ui.program_queue import ProgramQueuePanel
 from editor_gui.plugins.project.ui.tools import apply_name_swap, shifted_ia
 from editor_gui.widgets import ButtonActions
+from xknxeditor.prod.baggage import Baggages
+from xknxeditor.prod.errors import ArchiveError
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
@@ -83,6 +86,7 @@ class ProjectPlugin:
         self._get_selected_node_ids = get_selected_node_ids
         api.project.set_logger(Logger(api.log, "project"))
         self._button_runner = ButtonRunner(api.project, Logger(api.log, "project"))
+        self._baggages: dict[tuple[str, str], Baggages] = {}
 
         # Programming queue: repeated "Program" presses serialise onto the single bus slot.
         self._program_queue = ProgramQueue(
@@ -184,6 +188,7 @@ class ProjectPlugin:
                 state=self._button_state,
                 error=lambda device, button: device.param_errors.get(button.id),
             ),
+            get_help=self._help_text,
         )
         self._dali_panel = DaliCommissioningPanel(self._run_dali)
 
@@ -1050,6 +1055,30 @@ class ProjectPlugin:
             "shift addresses", plugin="project", offset=offset, changed=changed
         )
         return changed, errors
+
+    def _help_text(self, device: "Device", context: str) -> str | None:
+        """A help page from the ContextHelpFile baggage of the device's source .knxprod."""
+        help_file = device.app.program.context_help_file
+        info = self._api.project.get_device_info(device.node_id)
+        if not help_file or info is None or info.hardware2program_ref_id is None:
+            return None
+        source = self._api.catalog.get_program_source(info.hardware2program_ref_id)
+        if source is None:
+            return None
+        baggages = self._baggages.get(source)
+        if baggages is None:
+            try:
+                baggages = Baggages.from_archive(*source)
+            except (OSError, ArchiveError, zipfile.BadZipFile) as exc:
+                self._api.log.warning(
+                    "help unavailable",
+                    plugin="project",
+                    source=source[0],
+                    error=str(exc),
+                )
+                baggages = Baggages({})
+            self._baggages[source] = baggages
+        return baggages.help_text(help_file, context)
 
     def _handle_param_change(
         self, device: "Device", param_id: str, new_value: str

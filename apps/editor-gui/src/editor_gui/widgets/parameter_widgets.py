@@ -97,6 +97,19 @@ def _render_device_param(
     return req
 
 
+_selected_help: list[str] = []
+
+
+def take_selected_help() -> str | None:
+    """The HelpContext of a parameter or block the user selected since the last call."""
+    return _selected_help.pop() if _selected_help else None
+
+
+def _track_help(help_context: str | None) -> None:
+    if help_context and (imgui.is_item_activated() or imgui.is_item_clicked()):
+        _selected_help[:] = [help_context]
+
+
 def _default_display(param: UiParameter) -> str:
     """Human-readable default value (enum default resolved to its label)."""
     if isinstance(param.widget, EnumWidget):
@@ -567,6 +580,7 @@ def _render_block(
     # "###" keeps the node's identity keyed on its unique path (block_prefix), so a parameter edit
     # that changes the block's label does not collapse the tree. block_prefix is already unique.
     is_open = imgui.tree_node(f"{label}###{block_prefix}")
+    _track_help(block.help_context)
     imgui.same_line()
     imgui.text_disabled(f"({param_count})")
     if is_open:
@@ -687,6 +701,7 @@ def _render_grid_block(
                         differs=param.ref_id in differing_refs,
                     )
                     imgui.end_disabled()
+                    _track_help(param.help_context)
                     if changed:
                         imgui.pop_style_color()
                         if not read_only and imgui.begin_popup_context_item(
@@ -760,6 +775,7 @@ def _render_param_table(
                     )
             else:
                 imgui.text(label)
+            _track_help(param.help_context)
             if indent > 0:
                 imgui.unindent(indent)
             imgui.table_set_column_index(1)
@@ -776,6 +792,7 @@ def _render_param_table(
                 differs=differs,
             )
             imgui.end_disabled()
+            _track_help(param.help_context)
             # Right-click a changed value to restore the application default.
             if (
                 changed

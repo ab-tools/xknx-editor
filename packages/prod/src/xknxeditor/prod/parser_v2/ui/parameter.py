@@ -206,6 +206,7 @@ class UiParameter:
     icon: str | None = None  # icon override per placement
     cell: str | None = None  # "row,col" for TABLE/GRID layouts
     text_alignment: TextAlignment | None = None  # value alignment, from ParameterType
+    help_context: str | None = None  # page in the application's ContextHelpFile
 
 
 def resolve_widget(param_type: ParameterType) -> Widget:
