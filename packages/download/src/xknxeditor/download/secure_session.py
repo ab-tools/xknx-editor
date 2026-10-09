@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from xknx import XKNX
     from xknx.telegram.address import IndividualAddress
 
-    from .programmer import BusConnection
+    from .programmer import BusConnection, ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +55,19 @@ class SecureConnectionManager:
     """
 
     def __init__(
-        self, xknx: XKNX, address: IndividualAddress, security: DeviceSecurity
+        self,
+        xknx: XKNX,
+        address: IndividualAddress,
+        security: DeviceSecurity,
+        *,
+        transport: ConnectionManager | None = None,
     ) -> None:
-        """Initialize for a target address and its Tool Key security material."""
+        """Initialize for a target address and its Tool Key security material.
+
+        ``transport`` opens the underlying channel; by default a connection-oriented
+        xknx management connection."""
         self._xknx = xknx
+        self._transport = transport
         self._address = address
         self._management = SecureManagement(
             device=security, tool_address=xknx.current_address
@@ -71,7 +80,10 @@ class SecureConnectionManager:
         """Install the securer, open the connection and run S-A_Sync."""
         self._install()
         try:
-            self._connection = await self._xknx.management.connect(self._address)
+            if self._transport is not None:
+                self._connection = await self._transport.open()
+            else:
+                self._connection = await self._xknx.management.connect(self._address)
             await self._synchronize(self._connection)
         except BaseException:
             self._restore()
@@ -83,8 +95,11 @@ class SecureConnectionManager:
         try:
             if self._connection is not None:
                 self._connection = None
-                with contextlib.suppress(ManagementConnectionError):
-                    await self._xknx.management.disconnect(self._address)
+                if self._transport is not None:
+                    await self._transport.close()
+                else:
+                    with contextlib.suppress(ManagementConnectionError):
+                        await self._xknx.management.disconnect(self._address)
         finally:
             self._restore()
 

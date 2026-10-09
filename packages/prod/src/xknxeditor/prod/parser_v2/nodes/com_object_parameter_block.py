@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from xknxeditor.namespaces.intermediate.access_t import Access
 from xknxeditor.namespaces.intermediate.application_program_channel_t import (
     ComObjectParameterBlock,
 )
@@ -44,23 +45,15 @@ class ComObjectParameterBlockNode(DynamicNode):
             fill_name(apply_text_args(template or "", arg_defaults), name_value or "")
             or None
         )
-        rows = self._elem.rows
-        cols = self._elem.columns
-        row_labels = (
-            tuple(
-                apply_text_args(r.text or r.name or "", arg_defaults) for r in rows.row
-            )
-            if rows
-            else ()
-        )
-        column_headers = (
-            tuple(
-                apply_text_args(c.text or c.name or "", arg_defaults)
-                for c in cols.column
-            )
-            if cols
-            else ()
-        )
+        rows = self._elem.rows.row if self._elem.rows else []
+        cols = self._elem.columns.column if self._elem.columns else []
+
+        def label(text: str | None, ref: str | None) -> str:
+            value = ctx.get(ref) if ref else None
+            return fill_name(apply_text_args(text or "", arg_defaults), value or "")
+
+        row_labels = tuple(label(r.text, r.text_parameter_ref_id) for r in rows)
+        column_headers = tuple(label(c.text, c.text_parameter_ref_id) for c in cols)
         return [
             UiParameterBlock(
                 id=self._elem.id,
@@ -71,5 +64,13 @@ class ComObjectParameterBlockNode(DynamicNode):
                 children=tuple(items),
                 row_labels=row_labels,
                 column_headers=column_headers,
+                read_only=self._elem.access == Access.READ,
+                hidden=self._elem.access == Access.NONE,
+                help_context=self._elem.help_context,
+                column_widths=tuple(c.width for c in cols),
+                collapsed_rows=frozenset(
+                    i for i, r in enumerate(rows, start=1) if r.collapse_if_empty
+                ),
+                cell=self._elem.cell,
             )
         ]

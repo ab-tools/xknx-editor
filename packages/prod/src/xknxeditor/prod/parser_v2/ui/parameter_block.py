@@ -21,3 +21,10 @@ class UiParameterBlock:
     layout: ParameterBlockLayout = ParameterBlockLayout.LIST
     row_labels: tuple[str, ...] = ()
     column_headers: tuple[str, ...] = ()
+    read_only: bool = False
+    # Not shown in the dialog; its parameters stay active.
+    hidden: bool = False
+    help_context: str | None = None
+    column_widths: tuple[str, ...] = ()  # Column Width as declared, e.g. "45%"
+    collapsed_rows: frozenset[int] = frozenset()  # 1-based rows with CollapseIfEmpty
+    cell: str | None = None  # "row,col" inside a parent GRID/TABLE block

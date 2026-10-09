@@ -9,10 +9,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from editor_gui.concurrency import io_guarded, revision_cached
 from editor_gui.device import Device
+from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui.history import HistoryEntry
 from editor_gui.settings import config_dir
 from xknxeditor.namespaces.intermediate import (
@@ -22,6 +23,7 @@ from xknxeditor.namespaces.intermediate import (
 from xknxeditor.namespaces.intermediate.enable_t import Enable
 from xknxeditor.prod import Application
 from xknxeditor.prod.app_id import parse_app_id
+from xknxeditor.prod.parser_v2.calculation import VALIDATION_FAILED
 from xknxeditor.proj import ProjectService as _ProjectService
 from xknxeditor.proj import ProjectStorageError, ensure_sqlite_writable
 from xknxeditor.proj import import_ga_export as _import_ga_export
@@ -36,6 +38,7 @@ if TYPE_CHECKING:
     from editor_gui.plugins.catalog.service import CatalogService
     from xknxeditor.catalog import ProductSummary
     from xknxeditor.download.image import GroupCommunication
+    from xknxeditor.prod.parser_v2.calculation import ChangeSet
     from xknxeditor.proj.core.import_notes import ImportLoss
     from xknxeditor.proj.core.service import (
         DeviceInfo,
@@ -45,6 +48,10 @@ if TYPE_CHECKING:
     )
 
 _INSTALLATION = 0
+
+ParamMode = Literal["edit", "transfer", "raw"]
+"""How a parameter change is applied: ``edit`` runs calculations and validations, ``transfer``
+calculations only, ``raw`` stores the values as they are."""
 
 
 @dataclass(frozen=True)
@@ -154,6 +161,11 @@ def _co_instance_ref_from_row(
     )
 
 
+def _rejection_text(exc: ValueError) -> str:
+    message = str(exc)
+    return S.VALIDATION_FAILED if message == VALIDATION_FAILED else message
+
+
 def _history_device_id(data: dict[str, Any]) -> int | None:
     """The device id an undone/redone event touched — for a ``SyncDeviceComObjects`` (``device_id``)
     or a ``Composite`` (from the first sub-event that carries one), so only that device is rebuilt."""
@@ -175,6 +187,8 @@ def _history_label(event_type: str, data: dict[str, Any]) -> str:
     if event_type == "SetParameter":
         return f"Set {data.get('ref_id', '')} = {data.get('value', '')!r}"
     if event_type == "Composite":
+        if data.get("label"):
+            return str(data["label"])
         # A composite is a parameter change plus the com-object re-instantiation it triggered; label
         # it by its first sub-event (the SetParameter) so the history reads naturally.
         for sub in data.get("events", []):
@@ -1558,6 +1572,11 @@ class ProjectService:
         self._program_to_app = None
         self._app_cache.clear()
         self._bump()
+        updated = self.find_device_by_node_id(device.node_id)
+        if updated is not None:
+            self.recalculate_params(
+                updated.node_id, [p.ref_id for p in updated.parameter_instance_refs]
+            )
         self._log.info(
             "application updated",
             device=device.node_id,
@@ -1715,27 +1734,155 @@ class ProjectService:
         return device_id
 
     def set_param(self, device: Device, param_id: str, value: str) -> None:
+        """A user edit of one parameter; raises ``ValueError`` when it is rejected."""
         if self._pid is None:
             return
-        old_value = device.get_param_value(param_id)
         self._log.debug(
             "param clicked",
             device=device.node_id,
             param=param_id,
-            old=old_value,
+            old=device.get_param_value(param_id),
             new=value,
         )
-        # Parameter-driven active com-object set BEFORE the change; the reconcile diffs it against the
-        # after-set so only objects whose activeness THIS edit changes are added/removed (see
-        # _sync_param_and_com_objects). Captured before set_param_value updates the live dynamic UI.
+        try:
+            self.edit_params(device, [(param_id, value)], mode="edit")
+        except ValueError as exc:
+            device.param_errors[param_id] = _rejection_text(exc)
+            device.param_inputs[param_id] = value
+            raise
+        device.param_errors.pop(param_id, None)
+        device.param_inputs.pop(param_id, None)
+        self._retry_rejected_inputs(device)
+        self._log_param_tree(device, param_id)
+
+    def _retry_rejected_inputs(self, device: Device) -> None:
+        """Submit the inputs still shown in rejected fields again, as after every edit."""
+        for ref_id, value in list(device.param_inputs.items()):
+            try:
+                self.edit_params(device, [(ref_id, value)], mode="edit")
+            except ValueError as exc:
+                device.param_errors[ref_id] = _rejection_text(exc)
+                continue
+            device.param_errors.pop(ref_id, None)
+            device.param_inputs.pop(ref_id, None)
+
+    def param_error(self, node_id: int, param_id: str) -> str | None:
+        """The message of the last rejected edit of a parameter, until it is edited again."""
+        device = self.find_device_by_node_id(node_id)
+        return None if device is None else device.param_errors.get(param_id)
+
+    def edit_params(
+        self,
+        device: Device,
+        edits: list[tuple[str, str]],
+        *,
+        mode: ParamMode = "edit",
+        label: str | None = None,
+        skip_invalid: bool = False,
+    ) -> "ChangeSet":
+        """Apply parameter edits to a live device and persist them, including calculated values
+        and the com-object changes they cause, as one undo step."""
+        if self._pid is None:
+            return {}
         old_active = (
             device.active_parameter_driven_com_object_ref_ids()
             if self._co_reconcile_enabled
             else set[str]()
         )
-        device.set_param_value(param_id, value)
-        self._log_param_tree(device, param_id)
-        if self._sync_param_and_com_objects(device, param_id, value, old_active):
+        if mode == "raw":
+            changes: ChangeSet = {
+                ref_id: (device.get_param_value(ref_id), value)
+                for ref_id, value in edits
+            }
+            device.apply_param_values(dict(edits))
+        else:
+            changes = device.change_param_values(
+                edits, validate=mode == "edit", skip_invalid=skip_invalid
+            )
+        self._persist_param_changes(device, changes, old_active, label=label)
+        return changes
+
+    def recalculate_params(self, node_id: int, ref_ids: list[str]) -> "ChangeSet":
+        """Run and persist the calculations depending on ``ref_ids``."""
+        device = self.find_device_by_node_id(node_id)
+        if self._pid is None or device is None:
+            return {}
+        old_active = (
+            device.active_parameter_driven_com_object_ref_ids()
+            if self._co_reconcile_enabled
+            else set[str]()
+        )
+        changes = device.recalculate_params(ref_ids)
+        self._persist_param_changes(device, changes, old_active)
+        return changes
+
+    def parameter_driven_com_objects(self, device: Device) -> set[str]:
+        """The active com-object set a later :meth:`commit_param_changes` diffs against."""
+        if not self._co_reconcile_enabled:
+            return set[str]()
+        return device.active_parameter_driven_com_object_ref_ids()
+
+    def persist_script_changes(
+        self, node_id: int, changes: "ChangeSet", label: str | None
+    ) -> None:
+        """Store values a running parameter script already applied to its locked device."""
+        values = [(ref, new) for ref, (_, new) in changes.items() if new is not None]
+        if self._pid is None or not values:
+            return
+        self._svc.set_parameters(self._pid, node_id, values, label=label)
+        self._bump(structural=False)
+
+    def finish_script_changes(self, node_id: int, old_active: set[str]) -> None:
+        """After a parameter script: reconcile com-objects and rebuild the device from the project."""
+        device = self.find_device_by_node_id(node_id)
+        if self._pid is None or device is None:
+            return
+        target = self._com_object_target(device, old_active)
+        if target is not None:
+            self._svc.set_parameters(
+                self._pid,
+                node_id,
+                [],
+                com_object_target=[(r, None) for r in sorted(target)],
+                app_program_id=device.app.program.id,
+            )
+        self._refresh_device(node_id)
+        self._bump(structural=False)
+
+    def commit_param_changes(
+        self,
+        device: Device,
+        changes: "ChangeSet",
+        old_active: set[str],
+        *,
+        label: str | None = None,
+    ) -> None:
+        """Persist changes already applied to the live device as one undo step."""
+        self._persist_param_changes(device, changes, old_active, label=label)
+
+    def _persist_param_changes(
+        self,
+        device: Device,
+        changes: "ChangeSet",
+        old_active: set[str],
+        *,
+        label: str | None = None,
+    ) -> None:
+        values = [(ref, new) for ref, (_, new) in changes.items() if new is not None]
+        if self._pid is None or not values:
+            return
+        target = self._com_object_target(device, old_active)
+        self._svc.set_parameters(
+            self._pid,
+            device.node_id,
+            values,
+            com_object_target=None
+            if target is None
+            else [(r, None) for r in sorted(target)],
+            app_program_id=device.app.program.id,
+            label=label,
+        )
+        if target is not None:
             self._refresh_device(device.node_id)
         self._bump(structural=False)
 
@@ -1787,90 +1934,46 @@ class ProjectService:
             sections=sections[:40],
         )
 
-    def _sync_param_and_com_objects(
-        self, device: Device, param_id: str, value: str, old_active: set[str]
-    ) -> bool:
-        """Persist a parameter change plus any com-object re-instantiation it causes; return whether
-        the com-object set changed (i.e. the edited device must be rebuilt).
+    def _com_object_target(
+        self, device: Device, old_active: set[str]
+    ) -> set[str] | None:
+        """The com-object set after a parameter change, or ``None`` when it is unchanged.
 
-        Reconcile on the DELTA of the parameter-driven active set (chain-AND) across THIS edit — never
-        the absolute set. ``old_active`` is that set before the change, ``new_active`` after:
-        ADD objects that became active due to this edit (``(new_active - old_active) - current``) —
-        surfaces channels a function activates, incl. via a cascade like an RGB function enabling the
-        separate "Channel D"; REMOVE objects that became inactive (``(old_active - new_active) & current``).
-        Using the delta (not ``new_active - current``) cancels any pre-existing mismatch between the
-        configured set and the parser's derivation, so an unrelated edit — or an app the parser
-        under-derives (empty active set, unchanged across the edit) — touches nothing. Change is stored
-        as one composite (one undo step); survivors keep flags+links, removed rows are snapshotted."""
-        if self._pid is None or not self._co_reconcile_enabled:
-            self._svc.set_parameter(self._pid, device.node_id, param_id, value)  # type: ignore[arg-type]
-            return False
+        Reconcile on the DELTA of the parameter-driven active set (chain-AND) across the change —
+        never the absolute set: ADD objects that became active (``(new_active - old_active) -
+        current``), REMOVE objects that became inactive (``(old_active - new_active) & current``).
+        Using the delta cancels any pre-existing mismatch between the configured set and the parser's
+        derivation, so an unrelated edit touches nothing."""
+        if not self._co_reconcile_enabled:
+            return None
         new_active = device.active_parameter_driven_com_object_ref_ids()
         current = {co.id for co in device.com_objects}
-        add = (
-            new_active - old_active
-        ) - current  # became active due to this edit, not yet present
-        remove = (old_active - new_active) & current  # became inactive due to this edit
+        add = (new_active - old_active) - current
+        remove = (old_active - new_active) & current
         target = (current - remove) | add
-        self._log.debug(
-            "reconcile com-objects",
-            device=device.node_id,
-            param=param_id,
-            current=len(current),
-            active_before=len(old_active),
-            active_after=len(new_active),
-            add=len(add),
-            remove=len(remove),
-        )
         if target == current:
-            self._svc.set_parameter(self._pid, device.node_id, param_id, value)
-            return False
+            return None
         self._log.info(
             "sync com-objects",
             device=device.node_id,
-            param=param_id,
             added=sorted(add),
             removed=sorted(remove),
             target=len(target),
         )
-        self._svc.set_parameter_and_sync_com_objects(
-            self._pid,
-            device.node_id,
-            param_id,
-            value,
-            [(ref, None) for ref in sorted(target)],
-            app_program_id=device.app.program.id,
-        )
-        return True
+        return target
 
     def set_param_on_matching(self, device: Device, param_id: str, value: str) -> int:
         """Set a parameter on every device running the same application (multi-fill).
 
         Same-application devices share parameter ref-ids (they come from the one application
-        program), so the same ``param_id`` applies. Updates each live device in place; returns how
-        many devices were changed."""
+        program), so the same ``param_id`` applies. Returns how many devices were changed."""
         if self._pid is None:
             return 0
         app_id = getattr(device.app, "id", None)
-        count = 0
-        for d in self.devices:
-            if getattr(d.app, "id", None) != app_id:
-                continue
-            try:
-                old_active = (
-                    d.active_parameter_driven_com_object_ref_ids()
-                    if self._co_reconcile_enabled
-                    else set[str]()
-                )
-                d.set_param_value(param_id, value)
-                if self._sync_param_and_com_objects(d, param_id, value, old_active):
-                    self._refresh_device(d.node_id)
-            except (KeyError, ValueError):
-                continue
-            count += 1
-        if count:
-            self._bump(structural=False)
-        return count
+        targets = [
+            d.node_id for d in self.devices if getattr(d.app, "id", None) == app_id
+        ]
+        return self.set_param_on_selected(targets, param_id, value)
 
     def set_param_on_selected(
         self, node_ids: list[int], param_id: str, value: str
@@ -1879,26 +1982,22 @@ class ProjectService:
         subset). Same as :meth:`set_param` per device; returns how many were changed."""
         if self._pid is None:
             return 0
-        by_id = {d.node_id: d for d in self.devices}
         count = 0
         for nid in node_ids:
-            d = by_id.get(nid)
+            d = self.find_device_by_node_id(nid)
             if d is None:
                 continue
             try:
-                old_active = (
-                    d.active_parameter_driven_com_object_ref_ids()
-                    if self._co_reconcile_enabled
-                    else set[str]()
+                self.set_param(d, param_id, value)
+            except (KeyError, ValueError) as exc:
+                self._log.warning(
+                    "multi-edit parameter rejected",
+                    device=nid,
+                    param=param_id,
+                    error=str(exc),
                 )
-                d.set_param_value(param_id, value)
-                if self._sync_param_and_com_objects(d, param_id, value, old_active):
-                    self._refresh_device(d.node_id)
-            except (KeyError, ValueError):
                 continue
             count += 1
-        if count:
-            self._bump(structural=False)
         return count
 
     def set_device_name(self, node_id: int, old_name: str, new_name: str) -> None:
@@ -2079,28 +2178,18 @@ class ProjectService:
         return mapped
 
     def _apply_params(self, node_id: int, params: list[tuple[str, str]]) -> int:
-        """Apply (ref_id, value) overrides to a single device in place, reconciling com-objects per
-        change. Re-fetches the device each step (a change may rebuild it). Returns changed count."""
-        changed = 0
-        for ref_id, value in params:
-            device = self.find_device_by_node_id(node_id)
-            if device is None:
-                break
-            try:
-                if device.get_param_value(ref_id) == value:
-                    continue
-                old_active = (
-                    device.active_parameter_driven_com_object_ref_ids()
-                    if self._co_reconcile_enabled
-                    else set[str]()
-                )
-                device.set_param_value(ref_id, value)
-                if self._sync_param_and_com_objects(device, ref_id, value, old_active):
-                    self._refresh_device(node_id)
-            except (KeyError, ValueError):
-                continue
-            changed += 1
-        return changed
+        """Transfer (ref_id, value) overrides to a single device: calculations run, validations do
+        not, and values the device rejects are skipped. Returns the number of values changed."""
+        device = self.find_device_by_node_id(node_id)
+        if device is None:
+            return 0
+        edits = [
+            (ref, value)
+            for ref, value in params
+            if device.get_param_value(ref) != value
+        ]
+        changes = self.edit_params(device, edits, mode="transfer", skip_invalid=True)
+        return sum(1 for ref, _ in edits if ref in changes)
 
     def set_device_individual_address(
         self, node_id: int, old_address: str, new_address: str
@@ -2471,8 +2560,10 @@ class ProjectService:
             if event_type == "SetParameter":
                 value = data.get("old_value") if undo else data.get("value")
                 device = self.find_device_by_node_id(int(data["device_id"]))
-                if device is not None and value is not None:
-                    device.set_param_value(str(data["ref_id"]), str(value))
+                if device is not None:
+                    device.apply_param_values(
+                        {str(data["ref_id"]): None if value is None else str(value)}
+                    )
                     self._bump(structural=False)
                     return
             elif event_type in ("Composite", "SyncDeviceComObjects"):

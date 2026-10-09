@@ -39,6 +39,10 @@ class ConnectionService:
         # Global KNX master data (mask-version default procedures), injected at
         # startup. Required to resolve an UNLOAD scope and default/merged procedures.
         self.master: MasterData | None = None
+        # Maximum APDU length the connected interface reports, if it does.
+        self.interface_max_apdu_length: int | None = None
+        # Display name of the connected interface.
+        self.interface_name: str | None = None
         # Keyring service (KNX Data Secure), injected at startup. Used to look up a device's tool
         # key so a point-to-point download/test is secured when the device was commissioned secure.
         self.keyring: KeyringService | None = None
@@ -158,10 +162,23 @@ class ConnectionService:
     ) -> None:
         self._xknx = xknx
         self._loop = loop
+        if xknx is None:
+            self.interface_max_apdu_length = None
+            self.interface_name = None
 
     @property
     def xknx(self) -> XKNX | None:
         return self._xknx
+
+    def connection_label(self, *, with_address: bool) -> str | None:
+        """The connected interface's name, optionally prefixed with our individual address."""
+        xknx = self._xknx
+        if xknx is None:
+            return None
+        name = self.interface_name or ""
+        if not with_address:
+            return name or None
+        return f"{xknx.current_address} {name}".strip()
 
     def send_cemi(self, raw_cemi: bytes) -> Future[Any] | None:
         if self.not_connected("send_cemi"):
@@ -374,6 +391,9 @@ class ConnectionService:
             self._log.error("Master reset failed", address=address, error=str(exc))
             return
         self._log.info("Master reset sent", address=address)
+
+    def security_for(self, device: Device) -> DeviceSecurity | None:
+        return self._security_for(device)
 
     def _security_for(self, device: Device) -> DeviceSecurity | None:
         """KNX Data Secure tool key for ``device`` from the loaded keyring, or ``None`` (program in

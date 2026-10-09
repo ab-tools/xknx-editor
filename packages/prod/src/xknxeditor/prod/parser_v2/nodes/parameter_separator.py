@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from xknxeditor.namespaces.intermediate import ParameterSeparator
+from xknxeditor.namespaces.intermediate.access_t import Access
 
 from .._name import apply_text_args, fill_name
 from ..context import EvalContext
@@ -16,6 +17,8 @@ class ParameterSeparatorNode(DynamicNode):
         self._elem = elem
 
     def eval(self, ctx: EvalContext) -> list[UiNode]:
+        if self._elem.access == Access.NONE:
+            return []
         raw = self._elem.text
         if raw:
             template = apply_text_args(raw, ctx.get_arg_defaults())
@@ -27,4 +30,16 @@ class ParameterSeparatorNode(DynamicNode):
             text: str | None = fill_name(template, name_value or "") or None
         else:
             text = None
-        return [UiSeparator(id=self._elem.id, text=text, cell=self._elem.cell)]
+        elem = self._elem
+        return [
+            UiSeparator(
+                id=elem.id,
+                text=text,
+                cell=elem.cell,
+                hint=elem.uihint.value if elem.uihint is not None else None,
+                alignment=elem.text_alignment.value
+                if elem.text_alignment is not None
+                else None,
+                icon=elem.icon,
+            )
+        ]

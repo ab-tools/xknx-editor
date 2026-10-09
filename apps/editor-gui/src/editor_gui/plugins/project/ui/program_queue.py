@@ -1,89 +1,229 @@
-"""Floating "Programming queue" window, shown while devices wait behind the running one.
+"""Docked "Operations" panel: running and waiting bus operations, and the ones that ended.
 
-Rendered each frame from ``main.py`` (like the bus-operation overlay) only when the queue has
-waiting items, so a lone programming shows nothing new. It carries the running device's progress, so
-the standalone overlay is suppressed while this is visible (no double progress bar).
+The Active tab lists the running operation and the queue behind it, each with a progress bar, its
+current text and a cancel button. The History tab keeps ended operations until cleared. Every entry
+has a collapsible status line whose details show the error, the connection and the start/end times.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from imgui_bundle import imgui
+from imgui_bundle import hello_imgui, imgui
 
-from editor_gui.plugins.project.program_queue import QueueItem
+from editor_gui.plugins.project.program_queue import OperationState, QueueItem
 from editor_gui.plugins.project.strings import S
+from xknxeditor.download.scope import DownloadScope
+
+# Seconds a script may ignore Cancel before Force stop is offered.
+FORCE_STOP_AFTER = 10.0
+
+_RED = imgui.ImVec4(0.9, 0.4, 0.4, 1.0)
+_WARNING = imgui.ImVec4(0.95, 0.75, 0.2, 1.0)
 
 
 class ProgramQueuePanel:
     def __init__(
         self,
         *,
-        get_current: Callable[[], QueueItem | None],
-        get_queued: Callable[[], list[QueueItem]],
+        get_active: Callable[[], list[QueueItem]],
+        get_history: Callable[[], list[QueueItem]],
         get_progress: Callable[[], tuple[int, int] | None],
-        on_cancel: Callable[[int], None],
-        on_clear: Callable[[], None],
+        on_cancel: Callable[[QueueItem], None],
+        on_cancel_all: Callable[[], None],
+        on_clear_history: Callable[[], None],
     ) -> None:
-        self._get_current = get_current
-        self._get_queued = get_queued
+        self._get_active = get_active
+        self._get_history = get_history
         self._get_progress = get_progress
         self._on_cancel = on_cancel
-        self._on_clear = on_clear
+        self._on_cancel_all = on_cancel_all
+        self._on_clear_history = on_clear_history
+        self._select_active = False
+
+    def select_active(self) -> None:
+        """Bring the Active tab to the front on the next frame."""
+        self._select_active = True
 
     def render(self) -> None:
-        vp = imgui.get_main_viewport()
-        pos = imgui.ImVec2(
-            vp.work_pos.x + vp.work_size.x - 12.0,
-            vp.work_pos.y + vp.work_size.y - 12.0,
-        )
-        imgui.set_next_window_pos(pos, imgui.Cond_.always, imgui.ImVec2(1.0, 1.0))
-        imgui.set_next_window_bg_alpha(0.92)
-        imgui.set_next_window_size_constraints(
-            imgui.ImVec2(320.0, 0.0), imgui.ImVec2(560.0, 400.0)
-        )
-        flags = (
-            imgui.WindowFlags_.no_saved_settings
-            | imgui.WindowFlags_.always_auto_resize
-            | imgui.WindowFlags_.no_focus_on_appearing
-            | imgui.WindowFlags_.no_nav
-            | imgui.WindowFlags_.no_docking
-            | imgui.WindowFlags_.no_collapse
-        )
-        if not imgui.begin(f"{S.PROGRAM_QUEUE_TITLE}###program_queue", None, flags)[0]:
-            imgui.end()
+        if not imgui.begin_tab_bar("##operations_tabs"):
             return
+        flags = imgui.TabItemFlags_.none
+        if self._select_active:
+            flags = imgui.TabItemFlags_.set_selected
+            self._select_active = False
+        if imgui.begin_tab_item(f"{S.OPERATIONS_ACTIVE}###active", None, flags)[0]:
+            self._render_active()
+            imgui.end_tab_item()
+        if imgui.begin_tab_item(f"{S.OPERATIONS_HISTORY}###history")[0]:
+            self._render_history()
+            imgui.end_tab_item()
+        imgui.end_tab_bar()
 
-        current = self._get_current()
-        if current is not None:
-            progress = self._get_progress()
-            frac = (
-                progress[0] / progress[1]
-                if progress is not None and progress[1] > 0
-                else None
-            )
-            imgui.text_colored(
-                imgui.ImVec4(0.3, 0.8, 0.4, 1.0),
-                f"> {current.address}  {current.name}  [{current.scope.name}]",
-            )
-            if frac is not None:
-                imgui.same_line()
-                imgui.progress_bar(frac, imgui.ImVec2(120.0, 0.0))
+    def _render_active(self) -> None:
+        items = self._get_active()
+        imgui.begin_disabled(not items)
+        if imgui.button(S.OPERATIONS_CANCEL_ALL):
+            self._on_cancel_all()
+        imgui.end_disabled()
+        imgui.separator()
+        if not items:
+            imgui.text_disabled(S.OPERATIONS_NONE)
+            return
+        if imgui.begin_child("##active_list"):
+            for item in items:
+                self._render_item(item, active=True)
+        imgui.end_child()
 
-        queued = self._get_queued()
-        for pos, item in enumerate(queued, start=1):
-            imgui.push_id(item.node_id)
-            imgui.text_disabled(
-                f"{pos}.  {item.address}  {item.name}  [{item.scope.name}]  "
-                f"{S.PROGRAM_QUEUE_QUEUED}"
-            )
+    def _render_history(self) -> None:
+        items = self._get_history()
+        imgui.begin_disabled(not items)
+        if imgui.button(S.OPERATIONS_CLEAR_HISTORY):
+            self._on_clear_history()
+        imgui.end_disabled()
+        imgui.separator()
+        if not items:
+            imgui.text_disabled(S.OPERATIONS_NONE)
+            return
+        if imgui.begin_child("##history_list"):
+            for item in items:
+                self._render_item(item, active=False)
+        imgui.end_child()
+
+    def _render_item(self, item: QueueItem, *, active: bool) -> None:
+        imgui.push_id(str(id(item)))
+        right = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
+        if item.state is OperationState.FAILED:
+            _warning_icon()
             imgui.same_line()
-            if imgui.small_button(f"{S.PROGRAM_QUEUE_REMOVE}##cancel"):
-                self._on_cancel(item.node_id)
-            imgui.pop_id()
+        imgui.text(f"{item.address} {item.name}".strip())
+        if active:
+            self._render_cancel(item, right)
+            if item.state is OperationState.RUNNING:
+                self._render_progress(item)
+        if item.script is not None and item.script.text:
+            imgui.text_wrapped(item.script.text)
+        failed = item.state is OperationState.FAILED
+        if failed:
+            imgui.push_style_color(imgui.Col_.text, _RED)
+        is_open = imgui.tree_node_ex(
+            f"{_operation(item)}: {_state(item)}###status",
+            imgui.TreeNodeFlags_.span_avail_width,
+        )
+        if failed:
+            imgui.pop_style_color()
+        if is_open:
+            _render_details(item)
+            imgui.tree_pop()
+        imgui.separator()
+        imgui.pop_id()
 
-        if queued:
-            imgui.separator()
-            if imgui.button(S.PROGRAM_QUEUE_CLEAR):
-                self._on_clear()
-        imgui.end()
+    def _render_cancel(self, item: QueueItem, right: float) -> None:
+        run = item.script
+        running_download = item.state is OperationState.RUNNING and run is None
+        size = imgui.get_frame_height()
+        imgui.same_line(max(right - size, 0.0))
+        imgui.begin_disabled(running_download or (run is not None and run.canceled))
+        if imgui.button("X##cancel", imgui.ImVec2(size, size)):
+            self._on_cancel(item)
+        imgui.end_disabled()
+        if (
+            run is not None
+            and run.canceled
+            and run.ignored_cancel_for() >= FORCE_STOP_AFTER
+            and imgui.button(f"{S.SCRIPT_FORCE_STOP}##force_stop")
+        ):
+            run.abort.request()
+
+    def _render_progress(self, item: QueueItem) -> None:
+        bar = imgui.ImVec2(-1.0, hello_imgui.em_size(1.0))
+        run = item.script
+        if run is not None:
+            if run.progress is not None:
+                frac = min(max(run.progress / 100.0, 0.0), 1.0)
+                imgui.progress_bar(frac, bar, "")
+            else:
+                imgui.progress_bar(-1.0 * float(imgui.get_time()), bar, "")
+            return
+        progress = self._get_progress()
+        if progress is not None and progress[1] > 0:
+            imgui.progress_bar(
+                progress[0] / progress[1], bar, f"{progress[0]}/{progress[1]}"
+            )
+        else:
+            imgui.progress_bar(-1.0 * float(imgui.get_time()), bar, "")
+
+
+def _render_details(item: QueueItem) -> None:
+    if item.message:
+        imgui.push_style_color(imgui.Col_.text, _RED)
+        imgui.text_wrapped(item.message)
+        imgui.pop_style_color()
+    else:
+        imgui.text_disabled(S.OPERATION_NO_DETAILS)
+    if item.connection:
+        imgui.text(S.OPERATION_CONNECTION.format(connection=item.connection))
+    if item.started_at is not None:
+        imgui.text(S.OPERATION_START.format(time=item.started_at.strftime("%H:%M:%S")))
+    if item.ended_at is not None:
+        imgui.text(S.OPERATION_END.format(time=item.ended_at.strftime("%H:%M:%S")))
+
+
+def _warning_icon() -> None:
+    size = imgui.get_text_line_height()
+    pos = imgui.get_cursor_screen_pos()
+    draw = imgui.get_window_draw_list()
+    color = imgui.get_color_u32(_WARNING)
+    draw.add_triangle_filled(
+        imgui.ImVec2(pos.x + size * 0.5, pos.y),
+        imgui.ImVec2(pos.x + size, pos.y + size),
+        imgui.ImVec2(pos.x, pos.y + size),
+        color,
+    )
+    mark = imgui.calc_text_size("!")
+    draw.add_text(
+        imgui.ImVec2(pos.x + (size - mark.x) * 0.5, pos.y + size * 0.15),
+        imgui.get_color_u32(imgui.ImVec4(0.0, 0.0, 0.0, 1.0)),
+        "!",
+    )
+    imgui.dummy(imgui.ImVec2(size, size))
+
+
+def _operation(item: QueueItem) -> str:
+    if item.script is not None:
+        return S.SCRIPT_OPERATION
+    return f"{S.OPERATION_DOWNLOAD}({_scope_label(item.scope)})"
+
+
+def _state(item: QueueItem) -> str:
+    match item.state:
+        case OperationState.WAITING:
+            return S.OPERATION_WAITING
+        case OperationState.RUNNING:
+            if item.script is None:
+                return S.OPERATION_DOWNLOADING
+            return S.SCRIPT_CANCELING if item.script.canceled else S.SCRIPT_RUNNING
+        case OperationState.FINISHED:
+            return S.OPERATION_FINISHED
+        case OperationState.CANCELED:
+            return S.OPERATION_CANCELED
+        case OperationState.FAILED:
+            return S.OPERATION_FAILED
+
+
+def _scope_label(scope: DownloadScope | None) -> str:
+    match scope:
+        case DownloadScope.PARAMETERS:
+            return S.SCOPE_PARAMETERS
+        case DownloadScope.GROUP_COMMUNICATION:
+            return S.SCOPE_GROUP_COMMUNICATION
+        case DownloadScope.PARAMETERS_AND_GROUP_COMMUNICATION:
+            return f"{S.SCOPE_PARAMETERS}, {S.SCOPE_GROUP_COMMUNICATION}"
+        case DownloadScope.APPLICATION:
+            return S.SCOPE_APPLICATION
+        case DownloadScope.UNLOAD:
+            return S.SCOPE_UNLOAD
+        case DownloadScope.UNLOAD_ALL:
+            return S.SCOPE_UNLOAD_ALL
+        case _:
+            return S.SCOPE_FULL

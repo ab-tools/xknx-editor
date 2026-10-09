@@ -227,6 +227,27 @@ def test_set_parameter_and_sync_com_objects_is_one_undo_step(tmp_path: Path):
     assert state() == ("1", {"O-2_R-1", "O-3_R-1"})
 
 
+def test_set_parameters_is_one_labelled_undo_step(tmp_path: Path):
+    svc, pid = _new(tmp_path)
+    seg = _backbone_segment(svc, pid)
+    dev = svc.add_device(pid, seg, PRODUCT, address=1, name="D")
+    svc.set_parameters(
+        pid, dev, [("P-1", "1"), ("P-2", "2")], label="Button B executed."
+    )
+
+    def values() -> dict[str, str]:
+        return {p.ref_id: p.value for p in svc.devices(pid)[0].parameters}
+
+    assert values() == {"P-1": "1", "P-2": "2"}
+    peek = svc.peek_undo(pid)
+    assert peek is not None and peek[0] == "Composite"
+    assert peek[1]["label"] == "Button B executed."
+    assert svc.undo(pid)
+    assert values() == {}
+    svc.set_parameters(pid, dev, [("P-1", "3")])
+    assert svc.peek_undo(pid)[0] == "SetParameter"  # type: ignore[index]
+
+
 def test_peek_undo_redo_reports_next_event(tmp_path: Path):
     svc, pid = _new(tmp_path)
     seg = _backbone_segment(svc, pid)

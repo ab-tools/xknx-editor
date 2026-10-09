@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from xknxeditor.namespaces.intermediate.parameter_instance_ref_t import (
         ParameterInstanceRef,
     )
+    from xknxeditor.prod.parser_v2.calculation import ChangeSet
     from xknxeditor.prod.parser_v2.dynamic import DynamicUI
     from xknxeditor.prod.parser_v2.ui import UiComObject, UiNode
 
@@ -205,6 +207,18 @@ class Device:
     _dynamic_ui_dirty: bool = field(
         default=False, repr=False, compare=False, init=False
     )
+    # UI frozen while a script changes this device's parameters on the script worker.
+    _script_ui: list[UiNode] | None = field(
+        default=None, repr=False, compare=False, init=False
+    )
+    # Message of the last rejected edit per parameter, shown until it is edited again.
+    param_errors: dict[str, str] = field(
+        default_factory=dict[str, str], repr=False, compare=False, init=False
+    )
+    # The rejected input per parameter, kept in its field and submitted again after later edits.
+    param_inputs: dict[str, str] = field(
+        default_factory=dict[str, str], repr=False, compare=False, init=False
+    )
 
     def __post_init__(self) -> None:
         self._ensure_dynamic_ui()
@@ -293,7 +307,28 @@ class Device:
             self._cached_rows = generate_rows(self.get_visible_com_objects())
         return self._cached_rows
 
+    @property
+    def script_running(self) -> bool:
+        return self._script_ui is not None
+
+    def begin_script(self) -> DynamicUI | None:
+        """Freeze what is rendered while a script changes parameters on another thread; the
+        returned evaluator must only be used by that script until :meth:`end_script`."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is None:
+            return None
+        self._script_ui = dyn.ui()
+        self.get_visible_com_objects()
+        self._dynamic_ui_dirty = True
+        return dyn
+
+    def end_script(self) -> None:
+        self._script_ui = None
+        self._touched()
+
     def get_ui(self) -> list[UiNode]:
+        if self._script_ui is not None:
+            return self._script_ui
         dyn = self._ensure_dynamic_ui()
         if dyn is None:
             return []
@@ -366,21 +401,66 @@ class Device:
         dyn = self._ensure_dynamic_ui()
         if dyn is not None:
             dyn.set_com_obj_instance_ref(ref_id, coir)
-            self._dynamic_ui_dirty = (
-                True  # live edit not in the stored refs -> keep resident
-            )
-            self._cached_visible_cos = None
-            self._cached_rows = None
+            self._touched()
+
+    def _touched(self) -> None:
+        self._dynamic_ui_dirty = (
+            True  # live edit not in the stored refs -> keep resident
+        )
+        self._cached_visible_cos = None
+        self._cached_rows = None
 
     def set_param_value(self, ref_id: str, value: str) -> None:
         dyn = self._ensure_dynamic_ui()
         if dyn is not None:
             dyn.set_parameter_ref(ref_id, value)
-            self._dynamic_ui_dirty = (
-                True  # live edit not in the stored refs -> keep resident
-            )
-            self._cached_visible_cos = None
-            self._cached_rows = None
+            self._touched()
+
+    def change_param_values(
+        self,
+        edits: Sequence[tuple[str, str]],
+        *,
+        validate: bool,
+        skip_invalid: bool = False,
+    ) -> ChangeSet:
+        """Apply edits with their calculations (and validations); all-or-nothing unless
+        ``skip_invalid``, which drops the edits that fail."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is None:
+            return {}
+        done: ChangeSet = {}
+        try:
+            for ref_id, value in edits:
+                try:
+                    changes = dyn.edit_parameter(ref_id, value, validate=validate)
+                except ValueError:
+                    if not skip_invalid:
+                        raise
+                    continue
+                for ref, (old, new) in changes.items():
+                    done[ref] = (done[ref][0] if ref in done else old, new)
+        except BaseException:
+            dyn.apply_parameter_values({ref: old for ref, (old, _) in done.items()})
+            raise
+        finally:
+            self._touched()
+        return {ref: change for ref, change in done.items() if change[0] != change[1]}
+
+    def apply_param_values(self, values: Mapping[str, str | None]) -> None:
+        """Set (``None``: clear) values as they are, without calculations."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is not None:
+            dyn.apply_parameter_values(values)
+            self._touched()
+
+    def recalculate_params(self, ref_ids: Iterable[str]) -> ChangeSet:
+        """Run the calculations depending on ``ref_ids``."""
+        dyn = self._ensure_dynamic_ui()
+        if dyn is None:
+            return {}
+        changes = dyn.recalculate(ref_ids)
+        self._touched()
+        return changes
 
     def get_param_value(self, ref_id: str) -> str | None:
         """Current value of a parameter ref in the live dynamic UI (for logging/diagnostics)."""

@@ -1,11 +1,18 @@
 import datetime
 import functools
 import threading
+import zipfile
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from editor_gui.plugins.base import Logger, PanelDefinition, PluginAPI
-from editor_gui.plugins.project.program_queue import ProgramQueue, QueueItem
+from editor_gui.plugins.project.button_runner import ButtonRunner
+from editor_gui.plugins.project.online_runner import OnlineButtonRunner
+from editor_gui.plugins.project.program_queue import (
+    ProgramQueue,
+    QueueItem,
+    ScriptRun,
+)
 from editor_gui.plugins.project.service import DeviceConfigClipboard
 from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui import (
@@ -25,6 +32,9 @@ from editor_gui.plugins.project.ui.memory_preview import MemoryPreviewWindow
 from editor_gui.plugins.project.ui.preflight_result import PreflightResultWindow
 from editor_gui.plugins.project.ui.program_queue import ProgramQueuePanel
 from editor_gui.plugins.project.ui.tools import apply_name_swap, shifted_ia
+from editor_gui.widgets import ButtonActions
+from xknxeditor.prod.baggage import Baggages
+from xknxeditor.prod.errors import ArchiveError
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
@@ -33,6 +43,11 @@ if TYPE_CHECKING:
     from editor_gui.programming import DeviceOverview
     from xknxeditor.download.image import GroupCommunication
     from xknxeditor.download.scope import DownloadScope
+    from xknxeditor.prod.parser_v2.ui import UiButton
+
+
+def _run_now(fn: Callable[[], None]) -> None:
+    fn()
 
 
 # Which commissioning "loaded" flags a successful download of each scope sets (keyed by
@@ -70,19 +85,32 @@ class ProjectPlugin:
         self._api = api
         self._get_selected_node_ids = get_selected_node_ids
         api.project.set_logger(Logger(api.log, "project"))
+        self._button_runner = ButtonRunner(api.project, Logger(api.log, "project"))
+        self._baggages: dict[tuple[str, str], Baggages] = {}
 
         # Programming queue: repeated "Program" presses serialise onto the single bus slot.
         self._program_queue = ProgramQueue(
             is_busy=lambda: api.connection.busy_operation is not None,
             start=self._start_program,
             submit=api.main_thread.submit if api.main_thread is not None else None,
+            connection=lambda item: api.connection.connection_label(
+                with_address=item.script is None
+            ),
         )
         self._program_queue_panel = ProgramQueuePanel(
-            get_current=lambda: self._program_queue.current,
-            get_queued=lambda: self._program_queue.queued,
+            get_active=lambda: self._program_queue.active,
+            get_history=lambda: self._program_queue.history,
             get_progress=lambda: api.connection.busy_progress,
-            on_cancel=self._program_queue.cancel,
-            on_clear=self._program_queue.clear_queued,
+            on_cancel=self._program_queue.cancel_item,
+            on_cancel_all=self._program_queue.cancel_all,
+            on_clear_history=self._program_queue.clear_history,
+        )
+        self._online_runner = OnlineButtonRunner(
+            api.project,
+            api.connection,
+            api.main_thread.submit if api.main_thread is not None else _run_now,
+            Logger(api.log, "project"),
+            api.notify,
         )
 
         self._memory_preview = MemoryPreviewWindow(
@@ -155,6 +183,12 @@ class ProjectPlugin:
             render_dali=self._render_dali_tab,
             on_navigate_ga=self._navigate_to_group_address,
             on_paste_links=self._paste_com_object_links,
+            buttons=ButtonActions(
+                on_click=self._handle_button,
+                state=self._button_state,
+                error=lambda device, button: device.param_errors.get(button.id),
+            ),
+            get_help=self._help_text,
         )
         self._dali_panel = DaliCommissioningPanel(self._run_dali)
 
@@ -288,6 +322,12 @@ class ProjectPlugin:
                 label=S.PANEL_PROJECT_LOG,
                 dock="RightSpace",
                 render=self._project_log_panel.render,
+            ),
+            PanelDefinition(
+                name="operations",
+                label=S.PANEL_OPERATIONS,
+                dock="RightSpace",
+                render=self._program_queue_panel.render,
             ),
         ]
 
@@ -1016,10 +1056,70 @@ class ProjectPlugin:
         )
         return changed, errors
 
+    def _help_text(self, device: "Device", context: str) -> str | None:
+        """A help page from the ContextHelpFile baggage of the device's source .knxprod."""
+        help_file = device.app.program.context_help_file
+        info = self._api.project.get_device_info(device.node_id)
+        if not help_file or info is None or info.hardware2program_ref_id is None:
+            return None
+        source = self._api.catalog.get_program_source(info.hardware2program_ref_id)
+        if source is None:
+            return None
+        baggages = self._baggages.get(source)
+        if baggages is None:
+            try:
+                baggages = Baggages.from_archive(*source)
+            except (OSError, ArchiveError, zipfile.BadZipFile) as exc:
+                self._api.log.warning(
+                    "help unavailable",
+                    plugin="project",
+                    source=source[0],
+                    error=str(exc),
+                )
+                baggages = Baggages({})
+            self._baggages[source] = baggages
+        return baggages.help_text(help_file, context)
+
     def _handle_param_change(
         self, device: "Device", param_id: str, new_value: str
     ) -> None:
-        self._api.project.set_param(device, param_id, new_value)
+        try:
+            self._api.project.set_param(device, param_id, new_value)
+        except ValueError as exc:
+            self._api.log.warning(
+                "parameter change rejected",
+                plugin="project",
+                param=param_id,
+                error=str(exc),
+            )
+
+    def _handle_button(self, device: "Device", button: "UiButton") -> None:
+        self._api.log.info(
+            "button clicked", plugin="project", button=button.id, handler=button.handler
+        )
+        if button.online is None:
+            self._button_runner.start(device, button)
+            return
+        self._program_queue.enqueue(
+            QueueItem(
+                node_id=device.node_id,
+                address=device.individual_address or "",
+                name=device.name,
+                scope=None,
+                script=ScriptRun(button),
+            )
+        )
+
+    def _button_state(
+        self, device: "Device", button: "UiButton"
+    ) -> tuple[bool, str | None]:
+        if device.script_running:
+            return False, S.BUTTON_DEVICE_BUSY
+        if button.online is not None:
+            info = self._api.project.get_device_info(device.node_id)
+            if info is None or not info.individual_address_loaded:
+                return False, S.BUTTON_NEEDS_ADDRESS_LOADED
+        return True, None
 
     def _handle_param_change_all(
         self, device: "Device", param_id: str, new_value: str
@@ -1094,6 +1194,10 @@ class ProjectPlugin:
         """Start one queued programming via the normal single-device path (slot, progress, notice,
         commissioning all handled by ``program_device`` + the commissioning callback). Returns the
         Future, or None if it could not start (not connected / device gone)."""
+        if item.script is not None:
+            return self._online_runner.start(item)
+        if item.scope is None:
+            return None
         device = self._api.project.find_device_by_node_id(item.node_id)
         if device is None:
             self._api.log.debug(
@@ -1106,6 +1210,8 @@ class ProjectPlugin:
             device, item.scope, self._group_communication_for(device)
         )
         if future is None:
+            if self._api.connection.xknx is None:
+                item.message = S.SCRIPT_NOT_CONNECTED
             self._api.log.debug(
                 "program: cannot start, not connected",
                 plugin="project",
@@ -1146,12 +1252,12 @@ class ProjectPlugin:
     def tick_program_queue(self) -> None:
         self._program_queue.tick()
 
-    @property
-    def program_queue_visible(self) -> bool:
-        return self._program_queue.visible
-
-    def render_program_queue(self) -> None:
-        self._program_queue_panel.render()
+    def take_operations_focus(self) -> bool:
+        """Whether an operation was queued since the last call; selects the Active tab if so."""
+        if not self._program_queue.take_focus_request():
+            return False
+        self._program_queue_panel.select_active()
+        return True
 
     def _record_commissioning(self, node_id: int, scope_value: str) -> None:
         flags = _COMMISSIONING_BY_SCOPE.get(scope_value)
@@ -1281,6 +1387,7 @@ class ProjectPlugin:
         return self._panels
 
     def render_overlays(self) -> None:
+        self._button_runner.render()
         self._memory_preview.render()
         self._preflight_result.render()
 

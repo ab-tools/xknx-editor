@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<KNX xmlns="http://knx.org/xml/project/20" CreatedBy="test" ToolVersion="1">
+  <ManufacturerData>
+    <Manufacturer RefId="M-00FA">
+      <ApplicationPrograms>
+        <ApplicationProgram Id="M-00FA_A-0001-01-0000" ApplicationNumber="1" ApplicationVersion="1"
+            ProgramType="ApplicationProgram" MaskVersion="MV-07B0" Name="Calc"
+            LoadProcedureStyle="MergedProcedure" PeiType="0" DefaultLanguage="en-US"
+            DynamicTableManagement="false" Linkable="false" MinEtsVersion="5.0">
+          <Static>
+            <ParameterTypes>
+              <ParameterType Id="M-00FA_A-0001-01-0000_PT-N" Name="N">
+                <TypeNumber SizeInBit="16" Type="unsignedInt" minInclusive="0" maxInclusive="1000" />
+              </ParameterType>
+              <ParameterType Id="M-00FA_A-0001-01-0000_PT-P" Name="P" ValidationErrorRef="M-00FA_A-0001-01-0000_M-1">
+                <TypeText SizeInBit="80" Pattern="^$|^K[0-9]+$" />
+              </ParameterType>
+              <ParameterType Id="M-00FA_A-0001-01-0000_PT-T" Name="T">
+                <TypeText SizeInBit="160" />
+              </ParameterType>
+            </ParameterTypes>
+            <Parameters>
+              <Parameter Id="M-00FA_A-0001-01-0000_P-1" Name="A" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="A" Value="1" />
+              <Parameter Id="M-00FA_A-0001-01-0000_P-2" Name="B" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="B" Value="2" />
+              <Parameter Id="M-00FA_A-0001-01-0000_P-3" Name="C" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="C" Value="3" />
+              <Parameter Id="M-00FA_A-0001-01-0000_P-4" Name="D" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="D" Value="4" />
+              <Parameter Id="M-00FA_A-0001-01-0000_P-5" Name="E" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="E" Value="5" />
+              <Parameter Id="M-00FA_A-0001-01-0000_P-6" Name="T" ParameterType="M-00FA_A-0001-01-0000_PT-T" Text="T" Value="n=1" />
+              <Parameter Id="M-00FA_A-0001-01-0000_P-7" Name="Code" ParameterType="M-00FA_A-0001-01-0000_PT-P" Text="Code" Value="" />
+            </Parameters>
+            <ParameterRefs>
+              <ParameterRef Id="M-00FA_A-0001-01-0000_P-1_R-1" RefId="M-00FA_A-0001-01-0000_P-1" /><ParameterRef Id="M-00FA_A-0001-01-0000_P-2_R-2" RefId="M-00FA_A-0001-01-0000_P-2" /><ParameterRef Id="M-00FA_A-0001-01-0000_P-3_R-3" RefId="M-00FA_A-0001-01-0000_P-3" /><ParameterRef Id="M-00FA_A-0001-01-0000_P-4_R-4" RefId="M-00FA_A-0001-01-0000_P-4" /><ParameterRef Id="M-00FA_A-0001-01-0000_P-5_R-5" RefId="M-00FA_A-0001-01-0000_P-5" /><ParameterRef Id="M-00FA_A-0001-01-0000_P-6_R-6" RefId="M-00FA_A-0001-01-0000_P-6" /><ParameterRef Id="M-00FA_A-0001-01-0000_P-7_R-7" RefId="M-00FA_A-0001-01-0000_P-7" />
+            </ParameterRefs>
+            <ParameterCalculations>
+              <ParameterCalculation Id="M-00FA_A-0001-01-0000_PC-1" Name="PC-1" Language="JavaScript" LRTransformationFunc="double" RLTransformationFunc="half" LRTransformationParameters="{&quot;offset&quot;: 1}"><LParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-1_R-1" AliasName="a" /></LParameters><RParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-2_R-2" AliasName="b" /></RParameters></ParameterCalculation>
+              <ParameterCalculation Id="M-00FA_A-0001-01-0000_PC-2" Name="PC-2" Language="JavaScript" LRTransformationFunc="accumulate" RLTransformationFunc="nothing"><LParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-2_R-2" AliasName="b" /></LParameters><RParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-3_R-3" AliasName="c" /></RParameters></ParameterCalculation>
+              <ParameterCalculation Id="M-00FA_A-0001-01-0000_PC-3" Name="PC-3" Language="JavaScript" LRTransformationFunc="next" RLTransformationFunc="nothing"><LParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-3_R-3" AliasName="c" /></LParameters><RParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-4_R-4" AliasName="d" /></RParameters></ParameterCalculation>
+              <ParameterCalculation Id="M-00FA_A-0001-01-0000_PC-4" Name="PC-4" Language="JavaScript" LRTransformationFunc="boom" RLTransformationFunc="nothing"><LParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-5_R-5" AliasName="e" /></LParameters><RParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-1_R-1" AliasName="a" /></RParameters></ParameterCalculation>
+              <ParameterCalculation Id="M-00FA_A-0001-01-0000_PC-5" Name="PC-5" Language="JavaScript" LRTransformationFunc="label" RLTransformationFunc="nothing"><LParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-1_R-1" AliasName="a" /></LParameters><RParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-6_R-6" AliasName="t" /></RParameters></ParameterCalculation>
+            </ParameterCalculations>
+            <ParameterValidations>
+              <ParameterValidation Id="M-00FA_A-0001-01-0000_PV-1" Name="Range" ValidationFunc="checkRange" ValidationParameters="{&quot;max&quot;: 500}">
+                <Parameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-1_R-1" AliasName="a" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-2_R-2" AliasName="b" /></Parameters>
+              </ParameterValidation>
+              <ParameterValidation Id="M-00FA_A-0001-01-0000_PV-2" Name="NotThirteen" ValidationFunc="notThirteen">
+                <Parameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-3_R-3" AliasName="c" /></Parameters>
+              </ParameterValidation>
+            </ParameterValidations>
+            <Messages>
+              <Message Id="M-00FA_A-0001-01-0000_M-1" Name="BadCode" Text="Code must look like K123." />
+            </Messages>
+            <Script>
+function double(input, output, context) { output.b = input.a * 2 + context.offset; }
+function half(input, output) { output.a = Math.floor(input.b / 2); }
+function accumulate(input, output) { output.c = output.c + input.b; }
+function next(input, output) { output.d = input.c + 1; }
+function nothing(input, output) {}
+function boom(input, output) { throw new Error("bad"); }
+function plus100(input, output) { output.y = input.x + 100; }
+function label(input, output) { output.t = "n=" + input.a; }
+function checkRange(input, changed, value, context) {
+  if (input.a + input.b > context.max) { return changed + " too big: " + input[changed] + " was " + value; }
+  return true;
+}
+function notThirteen(input, changed, value) { return input.c != 13; }
+function checkModule(input, changed, value) { return input.x &lt; 50 ? true : "x must be below 50"; }
+function offlineButton(device, online, progress, context) {
+  if (online !== undefined || progress !== undefined) { throw new Error("not offline"); }
+  var a = device.getParameterByName("A");
+  a.value = a.value + context.n;
+}
+function failingButton(device) {
+  device.getParameterByName("C").value = 7;
+  throw new Error("stop");
+}
+function undoButton(device) {
+  try {
+    device.withUndo("group", function () {
+      device.getParameterByName("C").value = 8;
+      throw new Error("inner");
+    });
+  } catch (e) {}
+  device.getParameterByName("D").value = 9;
+}
+function rejectButton(device) { device.getParameterByName("C").value = 13; }
+function catchButton(device) {
+  try { device.getParameterByName("C").value = 13; } catch (e) { Log.info(e.message); }
+  try { device.getParameterByName("Nope"); } catch (e) { Log.info(e.message); }
+}
+function moduleButton(device, online, progress, context) {
+  device.getParameterByName("X").value = context.ch * 10;
+}
+function infoButton(device) {
+  var p = device.getParameterById("P-1_R-1");
+  var q = device.getParameterByUniqueNumber(3);
+  Log.info(p.name + "|" + q.parameterRefId + "|" + p.isActive + "|" + device.getMessage(1) + "|" + device.ApplicationProgramName);
+}
+function loopButton(device) { while (true) {} }
+function onlineButton(device, online, progress, context) {
+  progress.setText("step");
+  progress.setProgress(50);
+  online.connect();
+  var r = online.invokeFunctionProperty(160, 3, [1, 2]);
+  device.getParameterByName("C").value = r[0] + r.length + 7;
+  device.getParameterByName("D").value = 20;
+  online.disconnect();
+  throw new Error("late");
+}
+</Script>
+          </Static>
+          <ModuleDefs>
+            <ModuleDef Id="M-00FA_A-0001-01-0000_MD-1" Name="Mod">
+              <Arguments>
+                <Argument Id="M-00FA_A-0001-01-0000_MD-1_A-1" Name="Ch" />
+              </Arguments>
+              <Static>
+                <Parameters>
+                  <Parameter Id="M-00FA_A-0001-01-0000_MD-1_P-1" Name="X" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="X" Value="0" />
+                  <Parameter Id="M-00FA_A-0001-01-0000_MD-1_P-2" Name="Y" ParameterType="M-00FA_A-0001-01-0000_PT-N" Text="Y" Value="0" />
+                </Parameters>
+                <ParameterRefs>
+                  <ParameterRef Id="M-00FA_A-0001-01-0000_MD-1_P-1_R-1" RefId="M-00FA_A-0001-01-0000_MD-1_P-1" />
+                  <ParameterRef Id="M-00FA_A-0001-01-0000_MD-1_P-2_R-2" RefId="M-00FA_A-0001-01-0000_MD-1_P-2" />
+                </ParameterRefs>
+                <ParameterCalculations>
+                  <ParameterCalculation Id="M-00FA_A-0001-01-0000_MD-1_PC-1" Name="PC-1" Language="JavaScript" LRTransformationFunc="plus100" RLTransformationFunc="nothing"><LParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_MD-1_P-1_R-1" AliasName="x" /></LParameters><RParameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_MD-1_P-2_R-2" AliasName="y" /></RParameters></ParameterCalculation>
+                </ParameterCalculations>
+                <ParameterValidations>
+                  <ParameterValidation Id="M-00FA_A-0001-01-0000_MD-1_PV-1" Name="Mod" ValidationFunc="checkModule">
+                    <Parameters><ParameterRefRef RefId="M-00FA_A-0001-01-0000_MD-1_P-1_R-1" AliasName="x" /></Parameters>
+                  </ParameterValidation>
+                </ParameterValidations>
+              </Static>
+              <Dynamic>
+                <ParameterBlock Id="M-00FA_A-0001-01-0000_MD-1_PB-1" Text="Mod">
+                  <ParameterRefRef RefId="M-00FA_A-0001-01-0000_MD-1_P-1_R-1" />
+                  <ParameterRefRef RefId="M-00FA_A-0001-01-0000_MD-1_P-2_R-2" />
+                  <Button Id="M-00FA_A-0001-01-0000_MD-1_B-1" Text="Channel {{Ch}}" EventHandler="moduleButton" EventHandlerParameters="{&quot;ch&quot;: {{Ch}}}" />
+                </ParameterBlock>
+              </Dynamic>
+            </ModuleDef>
+          </ModuleDefs>
+          <Dynamic>
+            <ChannelIndependentBlock>
+              <ParameterBlock Id="M-00FA_A-0001-01-0000_PB-1" Text="Main">
+                <ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-1_R-1" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-2_R-2" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-3_R-3" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-4_R-4" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-5_R-5" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-6_R-6" /><ParameterRefRef RefId="M-00FA_A-0001-01-0000_P-7_R-7" />
+                <Button Id="M-00FA_A-0001-01-0000_B-1" Text="Run" EventHandler="offlineButton" EventHandlerParameters="{&quot;n&quot;: 2}" />
+                <Button Id="M-00FA_A-0001-01-0000_B-2" Text="Online" EventHandler="onlineButton" EventHandlerOnline="ConnectionOriented" />
+                <Button Id="M-00FA_A-0001-01-0000_B-3" Text="Hidden" Access="None" EventHandler="offlineButton" />
+                <Button Id="M-00FA_A-0001-01-0000_B-4" Text="Label {{0}}" Access="Read" TextParameterRefId="M-00FA_A-0001-01-0000_P-6_R-6" EventHandler="offlineButton" />
+              </ParameterBlock>
+              <Module Id="M-00FA_A-0001-01-0000_MD-1_M-1" RefId="M-00FA_A-0001-01-0000_MD-1" Name="M1"><NumericArg RefId="M-00FA_A-0001-01-0000_MD-1_A-1" Value="1" /></Module>
+              <Module Id="M-00FA_A-0001-01-0000_MD-1_M-2" RefId="M-00FA_A-0001-01-0000_MD-1" Name="M2"><NumericArg RefId="M-00FA_A-0001-01-0000_MD-1_A-1" Value="2" /></Module>
+            </ChannelIndependentBlock>
+          </Dynamic>
+        </ApplicationProgram>
+      </ApplicationPrograms>
+    </Manufacturer>
+  </ManufacturerData>
+</KNX>

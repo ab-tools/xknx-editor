@@ -906,22 +906,6 @@ class ProjectStrings:
         return _("Test Before Programming")
 
     @property
-    def PROGRAM_QUEUE_TITLE(self) -> str:
-        return _("Programming queue")
-
-    @property
-    def PROGRAM_QUEUE_QUEUED(self) -> str:
-        return _("queued")
-
-    @property
-    def PROGRAM_QUEUE_CLEAR(self) -> str:
-        return _("Clear queued")
-
-    @property
-    def PROGRAM_QUEUE_REMOVE(self) -> str:
-        return _("remove")
-
-    @property
     def PROGRAM_CONFIRM_TITLE(self) -> str:
         return _("Program device?")
 
@@ -1667,6 +1651,124 @@ class ProjectStrings:
     @property
     def HISTORY_LINE_RENAME(self) -> str:
         return _("Line: {old} -> {new}")
+
+    @property
+    def BUTTON_NEEDS_ADDRESS_LOADED(self) -> str:
+        return _(
+            "This action can only be performed when the individual address of the device is already downloaded."
+        )
+
+    @property
+    def BUTTON_EXECUTED(self) -> str:
+        return _("Button {0} executed. ")
+
+    @property
+    def BUTTON_DEVICE_BUSY(self) -> str:
+        return _("A parameter script is running for this device.")
+
+    @property
+    def BUTTON_NO_VALID_ADDRESS(self) -> str:
+        return _("The Device has no valid address or is not linked to an area or line.")
+
+    @property
+    def SCRIPT_OPERATION(self) -> str:
+        return _("Parameter Script")
+
+    @property
+    def SCRIPT_RUNNING(self) -> str:
+        return _("Executing Script")
+
+    @property
+    def SCRIPT_NOT_RESPONDING(self) -> str:
+        return _("Script not responding")
+
+    @property
+    def SCRIPT_FORCE_STOP(self) -> str:
+        return _("Force stop")
+
+    @property
+    def SCRIPT_ABORTED(self) -> str:
+        return _("The script was stopped.")
+
+    @property
+    def SCRIPT_CANCELING(self) -> str:
+        return _("Canceling…")
+
+    @property
+    def SCRIPT_NOT_CONNECTED(self) -> str:
+        return _("No connection to the bus.")
+
+    @property
+    def VALIDATION_FAILED(self) -> str:
+        return _("Parameter value cannot be set, because validation failed.")
+
+    @property
+    def PANEL_OPERATIONS(self) -> str:
+        return _("Operations")
+
+    @property
+    def OPERATIONS_ACTIVE(self) -> str:
+        return _("Active")
+
+    @property
+    def OPERATIONS_HISTORY(self) -> str:
+        return _("History")
+
+    @property
+    def OPERATIONS_CANCEL_ALL(self) -> str:
+        return _("Cancel all")
+
+    @property
+    def OPERATIONS_CLEAR_HISTORY(self) -> str:
+        return _("Clear History")
+
+    @property
+    def OPERATIONS_NONE(self) -> str:
+        return _("No operations.")
+
+    @property
+    def OPERATION_DOWNLOAD(self) -> str:
+        return _("Download")
+
+    @property
+    def OPERATION_DOWNLOADING(self) -> str:
+        return _("Downloading")
+
+    @property
+    def OPERATION_WAITING(self) -> str:
+        return _("Waiting")
+
+    @property
+    def OPERATION_FINISHED(self) -> str:
+        return _("Finished")
+
+    @property
+    def OPERATION_CANCELED(self) -> str:
+        return _("Canceled")
+
+    @property
+    def OPERATION_FAILED(self) -> str:
+        return _("failed")
+
+    @property
+    def OPERATION_NO_DETAILS(self) -> str:
+        return _("No details available")
+
+    @property
+    def OPERATION_CONNECTION(self) -> str:
+        return _("Connection: {connection}")
+
+    @property
+    def OPERATION_START(self) -> str:
+        return _("Start: {time}")
+
+    @property
+    def OPERATION_END(self) -> str:
+        return _("End: {time}")
+
+    @property
+    def CONFIGURE_HELP(self) -> str:
+        return _("Help")
 
 
 S = ProjectStrings()

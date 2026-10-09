@@ -75,6 +75,8 @@ DEFAULT_MAX_APDU_LENGTH = 15
 FREE_ACCESS_KEY = 0xFFFFFFFF
 # Upper bound used when negotiating the APDU length up from the default.
 MAX_NEGOTIATED_APDU_LENGTH = 254
+# Upper bound for device communication through an interface.
+MAX_COMMUNICATION_APDU_LENGTH = 239
 # Device Object property carrying the device's maximum APDU length (2 octets).
 PID_MAX_APDU_LENGTH = 56
 # Property id carrying an interface object's type (PID_OBJECT_TYPE).
@@ -88,6 +90,8 @@ _MAX_OBJECT_INDEX = 255
 # used. Split transfers at this boundary so each block uses the correct service.
 # see .references/ets_map.md
 _USER_MEMORY_BOUNDARY = 0x10000
+# A_UserMemory_Read/Write encode the octet count in 4 bits.
+_MAX_USER_MEMORY_CHUNK = 0xF
 
 
 class BusConnection(Protocol):
@@ -629,6 +633,69 @@ class DeviceProgrammer:
             FunctionPropertyStateResponse,
         )
         return self._function_property_result(telegram, object_index, property_id)
+
+    async def function_property_raw(
+        self, object_index: int, property_id: int, data: bytes, *, command: bool
+    ) -> bytes:
+        """A Function Property command or state read returning the response's return code
+        octet followed by its state data, without judging it."""
+        request: APCI = (
+            FunctionPropertyCommand(
+                object_index=object_index, property_id=property_id, data=data
+            )
+            if command
+            else FunctionPropertyStateRead(
+                object_index=object_index, property_id=property_id, data=data
+            )
+        )
+        telegram = await self.connection.request(request, FunctionPropertyStateResponse)
+        payload = telegram.payload
+        if not isinstance(payload, FunctionPropertyStateResponse):
+            raise VerificationError(
+                f"no function property response for object {object_index} "
+                f"property {property_id}"
+            )
+        return bytes([payload.return_code]) + payload.data
+
+    def _user_memory_chunk(self) -> int:
+        return max(
+            1,
+            min(_MAX_USER_MEMORY_CHUNK, self.max_apdu_length - self.apdu_overhead - 5),
+        )
+
+    async def read_user_memory(self, address: int, size: int) -> bytes:
+        """Read ``size`` octets with A_UserMemory_Read, whatever the address."""
+        result = bytearray()
+        while len(result) < size:
+            block = address + len(result)
+            count = min(self._user_memory_chunk(), size - len(result))
+            telegram = await self.connection.request(
+                UserMemoryRead(address=block, count=count), UserMemoryResponse
+            )
+            payload = telegram.payload
+            if not isinstance(payload, UserMemoryResponse) or not payload.data:
+                raise VerificationError(f"no user memory response at {block:#07x}")
+            result.extend(payload.data[: size - len(result)])
+        return bytes(result)
+
+    async def write_user_memory(
+        self, address: int, data: bytes, *, verify: bool = False
+    ) -> None:
+        """Write ``data`` with A_UserMemory_Write, whatever the address."""
+        offset = 0
+        while offset < len(data):
+            block = data[offset : offset + self._user_memory_chunk()]
+            await self.connection.send_data(
+                UserMemoryWrite(address=address + offset, data=block)
+            )
+            if (
+                verify
+                and await self.read_user_memory(address + offset, len(block)) != block
+            ):
+                raise CompareMismatch(
+                    f"user memory verification failed at {address + offset:#07x}"
+                )
+            offset += len(block)
 
     @staticmethod
     def _function_property_result(

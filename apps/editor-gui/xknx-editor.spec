@@ -33,7 +33,7 @@ _hiddenimports = []
 # `dukpy` (JS interpreter used by parser_v2's calculation path) loads .js runtime files from its
 # jsruntime/ data dir at runtime; without collect_all the frozen app reports "process_runtime.js
 # file is missing".
-for _pkg in ("imgui_bundle", "fastmcp", "mcp", "uvicorn", "xknx", "xknxproject", "dukpy"):
+for _pkg in ("imgui_bundle", "fastmcp", "mcp", "uvicorn", "xknx", "xknxproject", "dukpy", "tzdata", "mpmath"):
     d, b, h = collect_all(_pkg)
     _datas += d
     _binaries += b

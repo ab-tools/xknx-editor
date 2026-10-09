@@ -103,6 +103,12 @@ class EvalContext:
     def qualify(self, ref_id: str) -> str:
         return self._scope.qualify(ref_id)
 
+    @property
+    def module_instance_id(self) -> str | None:
+        """Id of the innermost module instance being evaluated, if any."""
+        mid = getattr(self._scope, "module_instance_id", None)
+        return mid if isinstance(mid, str) else None
+
     def qualify_local(self, ref_id: str) -> str:
         return self._scope.qualify_local(ref_id)
 

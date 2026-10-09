@@ -6,7 +6,10 @@ license = "GPL-2.0-only"
 requires-python = ">=3.13"
 dependencies = [
     "xknxeditor-namespaces",
-    "dukpy",
+    "dukpy>=0.6,<0.7",
+    "mpmath",
+    "tzdata",
+    "tzlocal",
 ]
 
 [build-system]

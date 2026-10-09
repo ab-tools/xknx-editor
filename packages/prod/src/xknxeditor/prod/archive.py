@@ -5,6 +5,7 @@ import re
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
+from xml.etree import ElementTree as ET
 
 from xknxeditor.prod.errors import ArchiveError
 
@@ -109,6 +110,29 @@ class Archive:
                 app_id = filename.removesuffix(".xml")
                 result[app_id] = self._zipfile.read(entry)
 
+        return result
+
+    def get_baggages(self, manufacturer_id: str) -> dict[str, bytes]:
+        """Baggage file contents for a manufacturer, keyed by Baggage id."""
+        self._validate_manufacturer_id(manufacturer_id)
+        index = f"{manufacturer_id}/Baggages.xml"
+        if index not in self._entries:
+            return {}
+        root = ET.fromstring(self._zipfile.read(index))
+        result: dict[str, bytes] = {}
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] != "Baggage":
+                continue
+            baggage_id = element.get("Id")
+            name = element.get("Name")
+            if not baggage_id or not name:
+                continue
+            target = (element.get("TargetPath") or "").replace("\\", "/").strip("/")
+            path = "/".join(
+                part for part in (manufacturer_id, "Baggages", target, name) if part
+            )
+            if path in self._entries:
+                result[baggage_id] = self._zipfile.read(path)
         return result
 
     def get_signature(self, manufacturer_id: str) -> bytes | None:
