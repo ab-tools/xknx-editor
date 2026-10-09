@@ -102,11 +102,15 @@ class OnlineButtonRunner:
         )
         online = OnlineHost(session, self._run_coroutine, run.abort)
         node_id = device.node_id
+        # The project this operation belongs to. Its persistence runs later on the GUI thread, by
+        # which point the user may have opened a different project; the token lets those writes be
+        # dropped instead of landing in the wrong project.
+        generation = self._project.generation
 
         def commit(changes: ChangeSet, description: str | None) -> None:
             self._submit(
                 lambda: self._project.persist_script_changes(
-                    node_id, changes, description
+                    node_id, changes, description, generation=generation
                 )
             )
 
@@ -132,7 +136,9 @@ class OnlineButtonRunner:
         device.param_errors.pop(button.id, None)
         future = default_worker().submit(job)
         future.add_done_callback(
-            lambda f: self._submit(lambda: self._finish(device, run, f, old_active))
+            lambda f: self._submit(
+                lambda: self._finish(device, run, f, old_active, generation)
+            )
         )
         return future
 
@@ -171,10 +177,13 @@ class OnlineButtonRunner:
         run: ScriptRun,
         future: Future[None],
         old_active: set[str],
+        generation: int,
     ) -> None:
         self._connection.end_operation()
         device.end_script()
-        self._project.finish_script_changes(device.node_id, old_active)
+        self._project.finish_script_changes(
+            device.node_id, old_active, generation=generation
+        )
         device = self._project.find_device_by_node_id(device.node_id) or device
         error = future.exception()
         if isinstance(error, ScriptAborted):

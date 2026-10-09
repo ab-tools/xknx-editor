@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from xknxeditor.namespaces.intermediate import (
@@ -43,6 +43,7 @@ from .calculation import (
     ChangeSet,
     Journal,
     run_calculations,
+    run_calculations_many,
     run_validations,
 )
 from .context import EvalCapture, EvalContext
@@ -911,22 +912,116 @@ class DynamicUI:
         )
 
     def recalculate(self, ref_ids: Iterable[str]) -> ChangeSet:
-        """Run the calculation plans of ``ref_ids`` without changing them; errors are logged."""
+        """Run the calculation plans of ``ref_ids`` without changing them; errors are logged.
+
+        One union plan per scope, so a calculation shared by several of ``ref_ids`` runs once over
+        their combined state instead of once per ref (which would feed intermediates back in)."""
         journal = self._journal()
+        for scope, locals_ in self._group_by_scope(ref_ids):
+            run_calculations_many(
+                self._idx,
+                locals_,
+                self._calc_scope(scope),
+                journal,
+                self.script_env,
+                raise_errors=False,
+                abort=self.script_abort,
+            )
+        self._ui = None
+        return journal.changes()
+
+    def _group_by_scope(
+        self, ref_ids: Iterable[str]
+    ) -> list[tuple[ParameterState, list[str]]]:
+        groups: dict[int, tuple[ParameterState, list[str]]] = {}
         for ref_id in ref_ids:
             scope, local = self._locate(ref_id)
             if local in self._idx.parameter_refs:
-                run_calculations(
+                groups.setdefault(id(scope), (scope, []))[1].append(local)
+        return list(groups.values())
+
+    def _apply_direct_edit(
+        self, journal: Journal, ref_id: str, value: str, *, validate: bool
+    ) -> tuple[ParameterState, str]:
+        """Strict-check, validate and journal one user edit (no calculations)."""
+        scope, local = self._locate(ref_id)
+        tc = self._idx.type_of(local)
+        if local not in self._idx.parameter_refs or tc is None:
+            raise ValueError(f"unknown parameter ref {ref_id!r}")
+        try:
+            value = check_value(value, tc, text_encoding=self.text_encoding)
+        except ValueError as exc:
+            text = self._idx.type_error_text(local)
+            raise ParameterValidationError(text or str(exc), ref_id=ref_id) from exc
+        self.ui()
+        active = self._state.active_param_refs()
+        if active and ref_id not in active:
+            raise ValueError(
+                f"parameter ref {ref_id!r} is not active in the current UI state"
+            )
+        if validate:
+            self._validate(scope, local, ref_id, value)
+        journal.set(ref_id, value)
+        self._ui = None
+        return scope, local
+
+    def edit_parameters(
+        self,
+        edits: Sequence[tuple[str, str]],
+        *,
+        validate: bool = True,
+        skip_invalid: bool = False,
+    ) -> ChangeSet:
+        """Apply a batch of user edits, then run each affected calculation once.
+
+        All direct edits are applied before any calculation runs, so a calculation reached by more
+        than one edit's chain is evaluated a single time over the final input values instead of once
+        per edit. ``skip_invalid`` drops the edits that fail (each applied and calculated on its own,
+        so one rejected edit does not discard the rest); otherwise the batch is all-or-nothing."""
+        if skip_invalid:
+            return self._edit_best_effort(edits, validate=validate)
+        journal = self._journal()
+        groups: dict[int, tuple[ParameterState, list[str]]] = {}
+        try:
+            for ref_id, value in edits:
+                scope, local = self._apply_direct_edit(
+                    journal, ref_id, value, validate=validate
+                )
+                groups.setdefault(id(scope), (scope, []))[1].append(local)
+            for scope, locals_ in groups.values():
+                run_calculations_many(
                     self._idx,
-                    local,
+                    locals_,
                     self._calc_scope(scope),
                     journal,
                     self.script_env,
-                    raise_errors=False,
+                    raise_errors=True,
                     abort=self.script_abort,
                 )
+        except BaseException:
+            journal.rollback()
+            self._ui = None
+            raise
         self._ui = None
         return journal.changes()
+
+    def _edit_best_effort(
+        self, edits: Sequence[tuple[str, str]], *, validate: bool
+    ) -> ChangeSet:
+        """Apply edits one at a time, dropping any that fail (value, validation or calculation)."""
+        done: ChangeSet = {}
+        try:
+            for ref_id, value in edits:
+                try:
+                    changes = self.edit_parameter(ref_id, value, validate=validate)
+                except ValueError:
+                    continue
+                for ref, (old, new) in changes.items():
+                    done[ref] = (done[ref][0] if ref in done else old, new)
+        except BaseException:
+            self.apply_parameter_values({ref: old for ref, (old, _) in done.items()})
+            raise
+        return {ref: change for ref, change in done.items() if change[0] != change[1]}
 
     def set_parameter_ref(self, ref_id: str, value: str) -> ChangeSet:
         """Set an active parameter and run its calculations; calculation errors are logged."""

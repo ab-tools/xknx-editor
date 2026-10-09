@@ -126,6 +126,38 @@ def test_raw_mode_skips_calculations(proj: ProjectService, app: Application) -> 
     assert _ref(2) not in stored
 
 
+def test_batched_edits_run_each_calculation_once(
+    proj: ProjectService, app: Application
+) -> None:
+    # ref2 = 2*ref1+1 (PC-1), ref3 = ref3 + ref2 (PC-2, accumulator), ref4 = ref3 + 1 (PC-3).
+    # One plan per edit would recompute PC-2 twice (ref3 = 3+11, then 14+11 = 25); the batch applies
+    # both direct edits first and runs each calculation once (ref3 = 3+11 = 14).
+    node_id = _add(proj, app)
+    device = proj.find_device_by_node_id(node_id)
+    assert device is not None
+    proj.edit_params(device, [(_ref(1), "5"), (_ref(2), "11")], mode="edit")
+    stored = _stored(proj, node_id)
+    assert stored[_ref(3)] == "14"
+    assert stored[_ref(4)] == "15"
+
+
+def test_script_changes_dropped_after_project_switch(
+    proj: ProjectService, app: Application, tmp_path: Path
+) -> None:
+    # A bus operation captures the project generation; once a different project is open its deferred
+    # writes must be dropped instead of landing in the wrong project.
+    node_id = _add(proj, app)
+    generation = proj.generation
+    proj.new(tmp_path / "other.xknx")
+    assert proj.generation != generation
+    proj.persist_script_changes(
+        node_id, {_ref(1): (None, "5")}, None, generation=generation
+    )
+    proj.finish_script_changes(node_id, set(), generation=generation)
+    # The stale writes were dropped: the freshly opened project has no such device.
+    assert proj.find_device_by_node_id(node_id) is None
+
+
 def test_recalculate_persists_derived_values(
     proj: ProjectService, app: Application
 ) -> None:

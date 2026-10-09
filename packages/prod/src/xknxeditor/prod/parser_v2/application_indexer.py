@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from collections.abc import Iterable
 
 from xknxeditor.namespaces.intermediate import (
     ApplicationProgram,
@@ -63,7 +64,9 @@ class ApplicationIndexer:
         self.code_segments: dict[str, SegmentBase] = {}
         self._calculations: dict[str, dict[str, list[ParameterCalculation]]] = {}
         self._calc_sides: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
-        self._plans: dict[str, tuple[tuple[ParameterCalculation, str], ...]] = {}
+        self._plans: dict[
+            tuple[str, ...], tuple[tuple[ParameterCalculation, str], ...]
+        ] = {}
         self._validations: dict[str, list[ParameterValidation]] = {}
         self.ref_owner: dict[str, str | None] = {}
         self.refs_by_name: dict[str | None, dict[str, str]] = {}
@@ -184,13 +187,26 @@ class ApplicationIndexer:
         The direction is ``"LR"`` when the triggering parameter is on the L side and
         ``"RL"`` when it is on the R side.
         """
-        cached = self._plans.get(ref_id)
+        return self.calculation_plan_many((ref_id,))
+
+    def calculation_plan_many(
+        self, ref_ids: Iterable[str]
+    ) -> tuple[tuple[ParameterCalculation, str], ...]:
+        """Union calculation plan for a batch of changed parameters, toposorted, each calc once.
+
+        Running one plan per edit re-executes calculations shared between the edits' chains and feeds
+        already-recomputed intermediates back in (double application). Seeding the walk with every
+        changed ref and emitting each calculation a single time avoids that; apply all direct edits
+        before running it.
+        """
+        seeds = tuple(dict.fromkeys(ref_ids))
+        cached = self._plans.get(seeds)
         if cached is not None:
             return cached
         order: list[tuple[ParameterCalculation, str]] = []
         chosen: set[str] = set()
-        frontier = [ref_id]
-        seen = {ref_id}
+        frontier = list(seeds)
+        seen = set(seeds)
         while frontier:
             ref = frontier.pop(0)
             sides = self._calculations.get(ref, {})
@@ -205,7 +221,7 @@ class ApplicationIndexer:
                             seen.add(out)
                             frontier.append(out)
         plan = self._toposort(order)
-        self._plans[ref_id] = plan
+        self._plans[seeds] = plan
         return plan
 
     def _sides(

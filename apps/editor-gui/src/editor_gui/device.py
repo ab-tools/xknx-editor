@@ -424,27 +424,17 @@ class Device:
         skip_invalid: bool = False,
     ) -> ChangeSet:
         """Apply edits with their calculations (and validations); all-or-nothing unless
-        ``skip_invalid``, which drops the edits that fail."""
+        ``skip_invalid``, which drops the edits that fail. All direct edits are applied before any
+        calculation runs, so a calculation shared by several edits runs once (not once per edit)."""
         dyn = self._ensure_dynamic_ui()
         if dyn is None:
             return {}
-        done: ChangeSet = {}
         try:
-            for ref_id, value in edits:
-                try:
-                    changes = dyn.edit_parameter(ref_id, value, validate=validate)
-                except ValueError:
-                    if not skip_invalid:
-                        raise
-                    continue
-                for ref, (old, new) in changes.items():
-                    done[ref] = (done[ref][0] if ref in done else old, new)
-        except BaseException:
-            dyn.apply_parameter_values({ref: old for ref, (old, _) in done.items()})
-            raise
+            return dyn.edit_parameters(
+                edits, validate=validate, skip_invalid=skip_invalid
+            )
         finally:
             self._touched()
-        return {ref: change for ref, change in done.items() if change[0] != change[1]}
 
     def apply_param_values(self, values: Mapping[str, str | None]) -> None:
         """Set (``None``: clear) values as they are, without calculations."""

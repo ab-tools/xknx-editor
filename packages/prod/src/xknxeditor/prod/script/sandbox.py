@@ -105,11 +105,16 @@ class ScriptContext:
         get_message: bool = False,
         on_log: Callable[[str, str], None] | None = None,
         jscript: JScriptEnv | bool = True,
+        deadline: float | None = None,
     ) -> None:
         from .compat import runtime
 
         self._abort = abort or AbortToken()
         self._on_log = on_log
+        # Wall-clock limit enforced from the loop-abort hook. The hook is immutable (see host.js),
+        # so a runaway loop in a calculation or validation (which the user cannot cancel) still stops.
+        self._deadline = deadline
+        self._start = time.monotonic()
         env = runtime.JScriptEnv() if jscript is True else jscript or None
         self._jscript = env is not None
         self._interp: Any = _Interpreter()
@@ -137,6 +142,12 @@ class ScriptContext:
         return self._abort
 
     def _tick(self) -> None:
+        if (
+            self._deadline is not None
+            and time.monotonic() - self._start > self._deadline
+        ):
+            self._abort.request()
+            raise AbortRequested()
         time.sleep(0.0005)
 
     def _log(self, level: str, message: str) -> None:

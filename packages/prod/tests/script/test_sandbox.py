@@ -212,6 +212,32 @@ def test_abort_unwinds_loops() -> None:
     assert time.monotonic() - started < 5
 
 
+def test_deadline_stops_runaway_loop() -> None:
+    ctx = ScriptContext(deadline=0.2, script="function h() { while (true) {} }")
+    started = time.monotonic()
+    with pytest.raises(ScriptAborted):
+        ctx.invoke("h", [])
+    assert time.monotonic() - started < 5
+
+
+def test_deadline_holds_when_script_tries_to_disable_the_abort_hook() -> None:
+    # The loop-abort hook is frozen, so neutering it is a no-op and the deadline still fires.
+    ctx = ScriptContext(
+        deadline=0.2,
+        script=(
+            "function h() {"
+            "  __xknx__.tick = function () {};"
+            "  __xk.tk = function () {};"
+            "  while (true) {}"
+            "}"
+        ),
+    )
+    started = time.monotonic()
+    with pytest.raises(ScriptAborted):
+        ctx.invoke("h", [])
+    assert time.monotonic() - started < 5
+
+
 def test_nested_context_inside_host_callback() -> None:
     store: dict[str, Any] = {"A": 1, "B": 0}
     host = _device_host(store)

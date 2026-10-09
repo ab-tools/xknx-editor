@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -33,6 +33,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 ChangeSet = dict[str, tuple[str | None, str | None]]
+
+# Calculations and validations run synchronously on an edit and cannot be canceled by the user, so a
+# runaway script is stopped by this wall-clock limit (enforced via the immutable loop-abort hook).
+_SCRIPT_DEADLINE = 5.0
 
 _IDENT = re.compile(r"^[A-Za-z_$][\w$]*$")
 
@@ -110,7 +114,23 @@ def run_calculations(
     abort: AbortToken | None = None,
 ) -> None:
     """Run the calculation plan a change of ``local_ref`` triggers."""
-    for calc, direction in idx.calculation_plan(local_ref):
+    run_calculations_many(
+        idx, (local_ref,), scope, journal, env, raise_errors=raise_errors, abort=abort
+    )
+
+
+def run_calculations_many(
+    idx: ApplicationIndexer,
+    local_refs: Iterable[str],
+    scope: CalculationScope,
+    journal: Journal,
+    env: JScriptEnv | None,
+    *,
+    raise_errors: bool,
+    abort: AbortToken | None = None,
+) -> None:
+    """Run the union calculation plan of a batch of changed parameters, each calculation once."""
+    for calc, direction in idx.calculation_plan_many(local_refs):
         try:
             _run_one(idx, calc, direction, scope, journal, env, abort)
         except CalculationError:
@@ -159,6 +179,7 @@ def _run_one(
                 host=host,
                 jscript=jscript,
                 abort=abort,
+                deadline=_SCRIPT_DEADLINE,
             )
             result = ctx.invoke(
                 func, [inputs, output, _context_object(params, calc.id)], readback=[1]
@@ -212,7 +233,12 @@ def _run_inline(
         decls + "\n" + code + "\nfunction __xk_outputs() { return {" + reader + "}; }\n"
     )
     ctx = ScriptContext(
-        script=script, get_message=True, host=host, jscript=jscript, abort=abort
+        script=script,
+        get_message=True,
+        host=host,
+        jscript=jscript,
+        abort=abort,
+        deadline=_SCRIPT_DEADLINE,
     )
     value = ctx.invoke("__xk_outputs", []).value
     return _as_dict(value)
@@ -250,6 +276,7 @@ def run_validations(
                 host={"a.message": idx.message_text},
                 jscript=jscript,
                 abort=abort,
+                deadline=_SCRIPT_DEADLINE,
             )
             result = ctx.invoke(
                 validation.validation_func, [inputs, changed, previous, context]
@@ -283,5 +310,6 @@ __all__ = [
     "ChangeSet",
     "Journal",
     "run_calculations",
+    "run_calculations_many",
     "run_validations",
 ]

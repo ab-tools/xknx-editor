@@ -251,5 +251,8 @@
     abort: ABORT
   };
 
+  // Freeze so script code cannot replace the loop-abort hook (api.tick) with a no-op and spin
+  // forever: __xknx__ is reachable from the script's global scope.
+  Object.freeze(api);
   defineProperty(g, "__xknx__", { value: api, enumerable: false, configurable: false, writable: false });
 })(this);

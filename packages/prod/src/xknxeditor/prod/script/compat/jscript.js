@@ -9,6 +9,8 @@
   var NURIError = URIError, NEvalError = EvalError, NReferenceError = ReferenceError;
   var defineProperty = Object.defineProperty;
   var getOwnPropertyNames = Object.getOwnPropertyNames;
+  // Captured before the ES3 cleanup below deletes Object.freeze; used to lock the abort hook.
+  var nativeFreeze = Object.freeze;
   var setPrototypeOf = Object.setPrototypeOf;
   var getPrototypeOf = Object.getPrototypeOf;
   var isArray = Array.isArray;
@@ -1409,5 +1411,8 @@
     norm: norm, hostError: hostError,
     fnmap: function (m) { for (var k in m) if (hasOwn.call(m, k)) fnmap[k] = m[k]; }
   };
+  // Frozen so a script cannot replace the loop-abort hook (api.tk) with a no-op (see host.js).
+  // nativeFreeze is captured above because the ES3 cleanup deletes Object.freeze.
+  nativeFreeze(api);
   defineProperty(g, "__xk", { value: api, enumerable: false, configurable: false, writable: false });
 })(this);

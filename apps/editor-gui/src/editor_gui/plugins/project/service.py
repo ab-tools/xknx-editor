@@ -314,6 +314,9 @@ class ProjectService:
         self._io_lock = catalog.io_lock
         self._svc = _ProjectService()
         self._pid: str | None = None
+        # Bumped on every new/open/close so a long-running bus operation can tell its originating
+        # project from whatever is open when its deferred writes finally run (see persist_script_changes).
+        self._generation = 0
         # ``_path`` is the user-facing "home" (may be on a network share). ``_working_path`` is the
         # local file the SQLite engine actually uses; equal to ``_path`` for a normal local project.
         # They differ only in the SMB/network fallback: the engine works on a local mirror and the
@@ -383,6 +386,12 @@ class ProjectService:
     @property
     def is_open(self) -> bool:
         return self._pid is not None
+
+    @property
+    def generation(self) -> int:
+        """Identity of the currently open project. Changes on every new/open/close; capture it when
+        starting a deferred/background operation and pass it back so a stale write is dropped."""
+        return self._generation
 
     @property
     def path(self) -> Path | None:
@@ -592,6 +601,7 @@ class ProjectService:
         self._pid = None
         self._path = None
         self._working_path = None
+        self._generation += 1
         self._reset()
 
     @staticmethod
@@ -612,6 +622,7 @@ class ProjectService:
             # project's rows ("UNIQUE constraint failed: installations.index").
             self._remove_project_file(working)
             self._pid = self._svc.create(working)
+            self._generation += 1
             self._path = path
             self._working_path = working
             self._reset()
@@ -680,6 +691,7 @@ class ProjectService:
                 self._copy_atomic(path, working)
             new_pid = self._svc.open(working)
             self._pid = new_pid
+            self._generation += 1
             self._path = path
             self._working_path = working
             self._reset()
@@ -1823,17 +1835,36 @@ class ProjectService:
         return device.active_parameter_driven_com_object_ref_ids()
 
     def persist_script_changes(
-        self, node_id: int, changes: "ChangeSet", label: str | None
+        self,
+        node_id: int,
+        changes: "ChangeSet",
+        label: str | None,
+        *,
+        generation: int | None = None,
     ) -> None:
-        """Store values a running parameter script already applied to its locked device."""
+        """Store values a running parameter script already applied to its locked device.
+
+        ``generation`` is the project identity captured when the operation started; a mismatch means
+        the project was closed or replaced while the operation ran, so the write is dropped rather
+        than applied to the wrong project."""
+        if generation is not None and generation != self._generation:
+            self._log.warning(
+                "dropping script changes for a project that is no longer open",
+                node_id=node_id,
+            )
+            return
         values = [(ref, new) for ref, (_, new) in changes.items() if new is not None]
         if self._pid is None or not values:
             return
         self._svc.set_parameters(self._pid, node_id, values, label=label)
         self._bump(structural=False)
 
-    def finish_script_changes(self, node_id: int, old_active: set[str]) -> None:
+    def finish_script_changes(
+        self, node_id: int, old_active: set[str], *, generation: int | None = None
+    ) -> None:
         """After a parameter script: reconcile com-objects and rebuild the device from the project."""
+        if generation is not None and generation != self._generation:
+            return
         device = self.find_device_by_node_id(node_id)
         if self._pid is None or device is None:
             return
