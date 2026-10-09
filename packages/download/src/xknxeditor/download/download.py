@@ -20,7 +20,7 @@ from .group_communication import materialize_group_communication_controls
 from .image import build_image
 from .merge import mask_authorize_levels, resolve_download_controls
 from .procedure import LoadProcedureRunner
-from .programmer import MAX_NEGOTIATED_APDU_LENGTH
+from .programmer import MAX_COMMUNICATION_APDU_LENGTH
 from .scope import DownloadScope, mask_object_types
 from .session import apdu_overhead, management_session
 
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 def _apdu_settings(max_apdu_length: int | None) -> tuple[int, bool]:
     """Resolve the APDU ceiling and whether to negotiate it from the device."""
     if max_apdu_length is None:
-        return MAX_NEGOTIATED_APDU_LENGTH, True
+        return MAX_COMMUNICATION_APDU_LENGTH, True
     return max_apdu_length, False
 
 

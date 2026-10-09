@@ -182,3 +182,35 @@ def test_abort_interrupts_a_waiting_call(
     threading.Timer(0.2, abort.request).start()
     with pytest.raises(AbortRequested):
         host.read_device_descriptor0()
+
+
+def test_connect_negotiates_apdu_without_authorize(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(descriptor=0x07B0)
+    device.properties[(0, 56)] = (254).to_bytes(2, "big")
+    host, _ = _host(loop, monkeypatch, device)
+    host.connect()
+    assert host.get_max_apdu_length() == 239
+    assert device.authorize_keys == []
+
+
+def test_interface_limit_applies(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(descriptor=0x07B0)
+    device.properties[(0, 56)] = (254).to_bytes(2, "big")
+    manager = _Manager(device)
+    monkeypatch.setattr(script_online, "management_session", lambda *a, **k: manager)
+    session = OnlineSession(
+        None,  # type: ignore[arg-type]
+        DEVICE,
+        mask_version=0x07B0,
+        interface_max_apdu_length=200,
+    )
+    host = OnlineHost(
+        session, lambda c: asyncio.run_coroutine_threadsafe(c, loop), AbortToken()
+    )
+    assert host.get_max_apdu_length() == 200
+    host.connect()
+    assert host.get_max_apdu_length() == 200

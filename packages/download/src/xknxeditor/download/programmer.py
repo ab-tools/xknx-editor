@@ -75,6 +75,8 @@ DEFAULT_MAX_APDU_LENGTH = 15
 FREE_ACCESS_KEY = 0xFFFFFFFF
 # Upper bound used when negotiating the APDU length up from the default.
 MAX_NEGOTIATED_APDU_LENGTH = 254
+# Upper bound for device communication through an interface.
+MAX_COMMUNICATION_APDU_LENGTH = 239
 # Device Object property carrying the device's maximum APDU length (2 octets).
 PID_MAX_APDU_LENGTH = 56
 # Property id carrying an interface object's type (PID_OBJECT_TYPE).

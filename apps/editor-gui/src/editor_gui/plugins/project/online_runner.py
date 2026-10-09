@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 from xknx.telegram import IndividualAddress
 
 from editor_gui.plugins.project.strings import S
-from xknxeditor.download.merge import mask_authorize_levels
 from xknxeditor.download.script_online import OnlineHost, OnlineSession
 from xknxeditor.prod.script import ScriptAborted, ScriptError
 from xknxeditor.prod.script.button import ParameterAccess, run_button
@@ -77,18 +76,12 @@ class OnlineButtonRunner:
             conn.end_operation()
             return None
         mask = _mask_version(device)
-        master = conn.master
         session = OnlineSession(
             conn.xknx,
             IndividualAddress(device.individual_address),
             security=conn.security_for(device),
             connectionless=run.button.online == "ConnectionLess",
             mask_version=mask,
-            authorize=bool(
-                master is not None
-                and mask is not None
-                and mask_authorize_levels(master.raw, device.app.program.mask_version)
-            ),
         )
         online = OnlineHost(session, self._run_coroutine, run.abort)
         node_id = device.node_id

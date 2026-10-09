@@ -12,7 +12,7 @@ from xknxeditor.prod.script.texts import COAP_NOT_SUPPORTED, NOT_CONNECTED
 
 from .programmer import (
     DEFAULT_MAX_APDU_LENGTH,
-    MAX_NEGOTIATED_APDU_LENGTH,
+    MAX_COMMUNICATION_APDU_LENGTH,
     DeviceProgrammer,
 )
 from .session import apdu_overhead, management_session
@@ -33,8 +33,8 @@ DEVICE_MISMATCH = "The device does not match: mask version {0:04X} instead of {1
 
 class OnlineSession:
     """Management session of one handler run; ``connect()`` will open the transport
-    (with Data Secure sync for a Tool Key), authorize, identify the device and negotiate the
-    APDU length."""
+    (with Data Secure sync for a Tool Key), identify the device and negotiate the APDU length
+    as the minimum of the device's, the interface's and the communication limit."""
 
     def __init__(
         self,
@@ -44,14 +44,14 @@ class OnlineSession:
         security: DeviceSecurity | None = None,
         connectionless: bool = False,
         mask_version: int | None = None,
-        authorize: bool = False,
+        interface_max_apdu_length: int | None = None,
     ) -> None:
         self._xknx = xknx
         self._address = address
         self._security = security
         self._connectionless = connectionless
         self._mask_version = mask_version
-        self._authorize = authorize
+        self._interface_max = interface_max_apdu_length
         self._manager: ConnectionManager | None = None
         self._programmer: DeviceProgrammer | None = None
 
@@ -79,14 +79,15 @@ class OnlineSession:
             programmer = DeviceProgrammer(
                 connection, apdu_overhead=apdu_overhead(self._security)
             )
-            if self._authorize and self._security is None:
-                await programmer.authorize()
             descriptor = await programmer.read_device_descriptor()
             if self._mask_version is not None and descriptor != self._mask_version:
                 raise HostError(DEVICE_MISMATCH.format(descriptor, self._mask_version))
-            negotiated = await programmer.read_max_apdu_length()
+            limit = MAX_COMMUNICATION_APDU_LENGTH
+            if self._interface_max is not None:
+                limit = min(limit, self._interface_max)
+            device_max = await programmer.read_max_apdu_length()
             programmer.max_apdu_length = max(
-                DEFAULT_MAX_APDU_LENGTH, min(negotiated, MAX_NEGOTIATED_APDU_LENGTH)
+                DEFAULT_MAX_APDU_LENGTH, min(device_max, limit)
             )
         except BaseException:
             await self.disconnect()
@@ -99,9 +100,11 @@ class OnlineSession:
             await manager.close()
 
     def max_apdu_length(self) -> int:
-        if self._programmer is None:
-            return INTERFACE_MAX_APDU_LENGTH
-        return self._programmer.max_apdu_length
+        if self._programmer is not None:
+            return self._programmer.max_apdu_length
+        if self._interface_max is not None:
+            return self._interface_max
+        return INTERFACE_MAX_APDU_LENGTH
 
     async def restart(self) -> None:
         await self.programmer.restart()
