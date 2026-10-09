@@ -607,8 +607,8 @@ msgstr "Plakken"
 msgid "This action can only be performed when the individual address of the device is already downloaded."
 msgstr "Deze actie kan alleen worden uitgevoerd als het fysieke adres van het apparaat al is gedownload."
 
-msgid "Button {0} executed."
-msgstr "Knop {0} uitgevoerd."
+msgid "Button {0} executed. "
+msgstr "Knop {0} uitgevoerd. "
 
 msgid "A parameter script is running for this device."
 msgstr "Voor dit apparaat wordt een parameterscript uitgevoerd."
@@ -636,3 +636,6 @@ msgstr "Wordt geannuleerd…"
 
 msgid "No connection to the bus."
 msgstr "Geen verbinding met de bus."
+
+msgid "Parameter value cannot be set, because validation failed."
+msgstr "De parameterwaarde kan niet worden ingesteld, omdat de validatie is mislukt."

@@ -32,7 +32,7 @@ def ui() -> DynamicUI:
 def test_returned_string_is_the_message(ui: DynamicUI) -> None:
     with pytest.raises(ParameterValidationError) as err:
         ui.edit_parameter(_ref(1), "600")
-    assert err.value.message == "a too big: 600"
+    assert err.value.message == "a too big: 600 was 1"
     assert err.value.ref_id == _ref(1)
     assert ui.get_value(_ref(1)) == "1"
     assert ui.get_value(_ref(2)) == "2"
@@ -42,7 +42,7 @@ def test_proposed_value_replaces_the_changed_input(ui: DynamicUI) -> None:
     ui.edit_parameter(_ref(1), "100")
     with pytest.raises(ParameterValidationError) as err:
         ui.edit_parameter(_ref(2), "450")
-    assert err.value.message == "b too big: 450"
+    assert err.value.message == "b too big: 450 was 201"
 
 
 def test_non_true_result_gives_generic_message(ui: DynamicUI) -> None:

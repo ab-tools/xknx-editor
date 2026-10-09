@@ -23,7 +23,7 @@ from ...script import (
     ScriptContext,
     ScriptError,
 )
-from ...script.values import from_js, to_js
+from ...script.values import ScriptValueError, coerce_script_value, to_js
 
 if TYPE_CHECKING:
     from ...script.compat.runtime import JScriptEnv
@@ -73,6 +73,8 @@ class CalculationScope:
 
     get: Callable[[str], str | None]
     qualify: Callable[[str], str]
+    locale: str | None = None
+    text_encoding: str = "latin-1"
 
 
 def _alias(idx: ApplicationIndexer, pr: Any) -> str:
@@ -169,20 +171,22 @@ def _run_one(
     except ScriptAborted:
         raise
     except ScriptError as exc:
-        raise CalculationError(
-            f"Scripting engine returned with error '{exc.message}'.",
-            calculation_id=calc.id,
-        ) from exc
+        raise CalculationError(exc.message, calculation_id=calc.id) from exc
     for pr in outs:
         alias = _alias(idx, pr)
         if alias not in computed or computed[alias] is None:
             continue
         try:
-            value = from_js(computed[alias], idx.type_of(pr.ref_id))
+            value = coerce_script_value(
+                computed[alias],
+                idx.type_of(pr.ref_id),
+                locale=scope.locale,
+                text_encoding=scope.text_encoding,
+            )
+        except ScriptValueError as exc:
+            raise CalculationError(exc.message, calculation_id=calc.id) from exc
         except ValueError as exc:
-            raise CalculationError(
-                f"Scripting engine returned with error '{exc}'.", calculation_id=calc.id
-            ) from exc
+            raise CalculationError(str(exc), calculation_id=calc.id) from exc
         if value != scope.get(pr.ref_id):
             journal.set(scope.qualify(pr.ref_id), value)
 
@@ -230,6 +234,7 @@ def run_validations(
         refs = validation.parameters.parameter_ref_ref
         changed = next((_alias(idx, pr) for pr in refs if pr.ref_id == local_ref), "")
         new_value = to_js(value, idx.type_of(local_ref))
+        previous = to_js(scope.get(local_ref), idx.type_of(local_ref))
         inputs = {
             _alias(idx, pr): new_value
             if pr.ref_id == local_ref
@@ -247,18 +252,29 @@ def run_validations(
                 abort=abort,
             )
             result = ctx.invoke(
-                validation.validation_func, [inputs, changed, new_value, context]
+                validation.validation_func, [inputs, changed, previous, context]
             ).value
         except ScriptAborted:
             raise
         except ScriptError as exc:
             log.warning("parameter validation %s failed: %s", validation.id, exc)
             raise ParameterValidationError(VALIDATION_FAILED, ref_id=local_ref) from exc
-        if result is True:
+        if isinstance(result, str):
+            raise ParameterValidationError(
+                result or VALIDATION_FAILED, ref_id=local_ref
+            )
+        if _accepts(result):
             continue
-        if isinstance(result, str) and result:
-            raise ParameterValidationError(result, ref_id=local_ref)
         raise ParameterValidationError(VALIDATION_FAILED, ref_id=local_ref)
+
+
+def _accepts(result: object) -> bool:
+    """No result, ``true`` or a non-zero number accepts; anything else rejects."""
+    if result is None or isinstance(result, bool):
+        return result is None or result
+    if isinstance(result, (int, float)):
+        return result != 0
+    return False
 
 
 __all__ = [

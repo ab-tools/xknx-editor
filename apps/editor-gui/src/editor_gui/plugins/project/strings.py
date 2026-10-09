@@ -1676,7 +1676,7 @@ class ProjectStrings:
 
     @property
     def BUTTON_EXECUTED(self) -> str:
-        return _("Button {0} executed.")
+        return _("Button {0} executed. ")
 
     @property
     def BUTTON_DEVICE_BUSY(self) -> str:
@@ -1717,6 +1717,10 @@ class ProjectStrings:
     @property
     def SCRIPT_NOT_CONNECTED(self) -> str:
         return _("No connection to the bus.")
+
+    @property
+    def VALIDATION_FAILED(self) -> str:
+        return _("Parameter value cannot be set, because validation failed.")
 
 
 S = ProjectStrings()

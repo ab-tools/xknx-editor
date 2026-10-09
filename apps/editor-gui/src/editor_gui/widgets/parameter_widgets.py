@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from imgui_bundle import imgui
 
@@ -31,6 +31,9 @@ from xknxeditor.prod.parser_v2.ui.parameter import (
 
 # Parameters changed from their default are tinted to stand out.
 _CHANGED_COLOR = imgui.ImVec4(0.36, 0.71, 1.0, 1.0)
+# Text parameters longer than this many octets get a multi-line editor.
+_MULTILINE_TEXT_LENGTH = 255
+_MULTILINE_TEXT_ROWS = 6
 _ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
 
 
@@ -64,12 +67,33 @@ def _render_button(
         imgui.pop_style_color()
 
 
-def _render_param_error(device: Device, ref_id: str) -> None:
-    error = device.param_errors.get(ref_id)
-    if error:
-        imgui.push_style_color(imgui.Col_.text, _ERROR_COLOR)
-        imgui.text_wrapped(error)
-        imgui.pop_style_color()
+def _render_device_param(
+    device: Device,
+    param: UiParameter,
+    widget_id: str,
+    on_change: Callable[[str], None],
+    *,
+    deferred_enum: bool,
+    differs: bool,
+) -> EnumPopupRequest | None:
+    """A parameter widget; a rejected input stays in a red field with the message as tooltip."""
+    error = device.param_errors.get(param.ref_id)
+    if error is None:
+        return render_param_widget(
+            param, widget_id, on_change, deferred_enum=deferred_enum, differs=differs
+        )
+    rejected = device.param_inputs.get(param.ref_id)
+    shown = replace(param, value=rejected) if rejected is not None else param
+    imgui.push_style_color(imgui.Col_.border, _ERROR_COLOR)
+    imgui.push_style_var(imgui.StyleVar_.frame_border_size, 2.0)
+    req = render_param_widget(
+        shown, widget_id, on_change, deferred_enum=deferred_enum, differs=differs
+    )
+    imgui.pop_style_var()
+    imgui.pop_style_color()
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(error)
+    return req
 
 
 def _default_display(param: UiParameter) -> str:
@@ -134,8 +158,14 @@ def render_param_widget(
                 changed, new_checked = imgui.checkbox(f"##{widget_id}", checked)
                 if changed:
                     on_change("1" if new_checked else "0")
-        case TextWidget():
-            _render_text_param(widget_id, param.value, on_change, differs)
+        case TextWidget() as w:
+            _render_text_param(
+                widget_id,
+                param.value,
+                on_change,
+                differs,
+                multiline=(w.max_length or 0) > _MULTILINE_TEXT_LENGTH,
+            )
         case PictureWidget():
             imgui.text_disabled(S.NODE_IMAGE_PLACEHOLDER)
         case _:
@@ -144,10 +174,21 @@ def render_param_widget(
 
 
 def _render_text_param(
-    widget_id: str, value: str, on_change: Callable[[str], None], differs: bool
+    widget_id: str,
+    value: str,
+    on_change: Callable[[str], None],
+    differs: bool,
+    *,
+    multiline: bool = False,
 ) -> None:
     if differs:
         _, new_value = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
+    elif multiline:
+        _, new_value = imgui.input_text_multiline(
+            f"##{widget_id}",
+            value,
+            imgui.ImVec2(-1, imgui.get_text_line_height() * _MULTILINE_TEXT_ROWS),
+        )
     else:
         _, new_value = imgui.input_text(f"##{widget_id}", value)
     if imgui.is_item_deactivated_after_edit() and (not differs or new_value):
@@ -624,7 +665,8 @@ def _render_grid_block(
                     changed = param.value != param.default_value
                     if changed:
                         imgui.push_style_color(imgui.Col_.text, _CHANGED_COLOR)
-                    req = render_param_widget(
+                    req = _render_device_param(
+                        device,
                         param,
                         widget_id,
                         lambda v, d=device, p=param.ref_id: on_change(d, p, v),
@@ -637,7 +679,6 @@ def _render_grid_block(
                             if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
                                 on_change(device, param.ref_id, param.default_value)
                             imgui.end_popup()
-                    _render_param_error(device, param.ref_id)
                     if req is not None:
                         popup_request = EnumPopupRequest(device=device, param=req.param)
                 elif label is not None:
@@ -705,7 +746,8 @@ def _render_param_table(
             imgui.table_set_column_index(1)
             imgui.set_next_item_width(-1)
             widget_id = f"{device.node_id}_{param.ref_id}"
-            req = render_param_widget(
+            req = _render_device_param(
+                device,
                 param,
                 widget_id,
                 lambda v, d=device, p=param.ref_id: on_change(d, p, v),
@@ -717,7 +759,6 @@ def _render_param_table(
                 if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
                     on_change(device, param.ref_id, param.default_value)
                 imgui.end_popup()
-            _render_param_error(device, param.ref_id)
             if req is not None:
                 popup_request = EnumPopupRequest(device=device, param=req.param)
         imgui.end_table()

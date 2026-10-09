@@ -56,6 +56,57 @@
     return decode(r.v);
   }
 
+  function argumentError(message, number) {
+    if (g.__xk) return g.__xk.typeError(message, number);
+    var err = new TypeError(message);
+    err.number = number;
+    err.description = message;
+    return err;
+  }
+
+  function arity(f, n) {
+    return function () {
+      if (arguments.length < n) throw argumentError("Invalid procedure call or argument", -2146828283);
+      if (arguments.length > n) {
+        throw argumentError("Wrong number of arguments or invalid property assignment", -2146827838);
+      }
+      return fnApply.call(f, this, arguments);
+    };
+  }
+
+  function method(f) {
+    defineProperty(f, "__xk_unknown", { value: true });
+    return f;
+  }
+
+  function methods(o) {
+    for (var k in o) if (hasOwn.call(o, k) && typeof o[k] === "function") method(o[k]);
+    return o;
+  }
+
+  // Reading a parameterless method as a property invokes it; if that fails the method itself is read.
+  function getters(o, names) {
+    var raw = {};
+    for (var i = 0; i < names.length; i++) {
+      (function (n) {
+        var f = o[n];
+        raw[n] = f;
+        defineProperty(o, n, {
+          get: function () {
+            try {
+              return f.call(o);
+            } catch (e) {
+              if (e === ABORT) throw e;
+              return f;
+            }
+          }
+        });
+      })(names[i]);
+    }
+    defineProperty(o, "__xk_raw", { value: raw });
+    return o;
+  }
+
   function param(ref) {
     if (ref === null || ref === undefined) return null;
     var p = {};
@@ -71,21 +122,26 @@
 
   function device(scope) {
     var d = {
-      getParameterByName: function (name) { return param(host("d.byName", scope, name)); },
-      getParameterById: function (id) { return param(host("d.byId", scope, id)); },
-      getParameterByUniqueNumber: function (n) { return param(host("d.byNumber", scope, n)); },
-      getMessage: function (id) { return host("d.message", id); },
-      withUndo: function (description, fn) {
+      getParameterByName: arity(function (name) { return param(host("d.byName", scope, name)); }, 1),
+      getParameterById: arity(function (id) { return param(host("d.byId", scope, id)); }, 1),
+      getParameterByUniqueNumber: arity(function (n) { return param(host("d.byNumber", scope, n)); }, 1),
+      getMessage: arity(function (id) {
+        var m = host("d.message", id);
+        return m === null ? undefined : m;
+      }, 1),
+      withUndo: arity(function (description, fn) {
+        if (typeof fn !== "function") return;
         host("d.undoBegin", description === undefined ? "" : String(description));
         try {
           fn();
         } catch (e) {
-          if (e !== ABORT) host("d.undoRollback");
-          throw e;
+          if (e === ABORT) throw e;
+          host("d.undoRollback");
         }
         host("d.undoCommit");
-      }
+      }, 2)
     };
+    methods(d);
     defineProperty(d, "ApplicationProgramName", { get: function () { return host("d.appName"); } });
     return d;
   }
@@ -97,30 +153,41 @@
     "writeUserMemory", "restart", "coapReadCollection", "coapGet", "coapPut", "coapPost"
   ];
 
+  var ONLINE_ARITY = {
+    connect: 0, disconnect: 0, readDeviceDescriptor0: 0, getMaxApduLength: 0,
+    locateInterfaceObject: 2, readFunctionProperty: 3, invokeFunctionProperty: 3,
+    readProperty: 5, writeProperty: 7, readMemory: 2, writeMemory: 3, readUserMemory: 2,
+    writeUserMemory: 3, restart: 0, coapReadCollection: 1, coapGet: 1, coapPut: 2, coapPost: 2
+  };
+
   function online() {
     var o = {};
     for (var i = 0; i < ONLINE.length; i++) {
       o[ONLINE[i]] = (function (n) {
-        return function () {
+        return arity(function () {
           var a = ["o." + n];
           for (var j = 0; j < arguments.length; j++) a.push(arguments[j]);
-          return fnApply.call(host, null, a);
-        };
+          var r = fnApply.call(host, null, a);
+          return r === null ? undefined : r;
+        }, ONLINE_ARITY[n]);
       })(ONLINE[i]);
     }
-    return o;
+    methods(o);
+    return getters(o, ["connect", "disconnect", "readDeviceDescriptor0", "getMaxApduLength", "restart"]);
   }
 
   function progress() {
-    return {
-      setProgress: function (v) { host("g.progress", Number(v)); },
-      setText: function (t) { host("g.text", t === undefined ? "" : String(t)); },
-      isCanceled: function () { return host("g.canceled"); }
-    };
+    return getters(methods({
+      setProgress: arity(function (v) { host("g.progress", Number(v)); }, 1),
+      setText: arity(function (t) { host("g.text", t === undefined ? "" : String(t)); }, 1),
+      isCanceled: arity(function () { return host("g.canceled"); }, 0)
+    }), ["isCanceled"]);
   }
 
   function logger(level) {
-    return function (msg) { host("log", level, msg === undefined || msg === null ? "" : String(msg)); };
+    return method(arity(function (msg) {
+      host("log", level, msg === undefined || msg === null ? "" : String(msg));
+    }, 1));
   }
 
   function resolve(a) {
@@ -128,6 +195,7 @@
       if (a.$host === "device") return device(a.scope);
       if (a.$host === "online") return online();
       if (a.$host === "progress") return progress();
+      if (a.$host === "undefined") return undefined;
       return null;
     }
     return decode(a);
@@ -148,14 +216,14 @@
 
   var api = {
     install: function (globalsSpec) {
-      var log = { error: logger("error"), warn: logger("warn"), info: logger("info"), Debug: logger("debug") };
+      var log = { error: logger("error"), warn: logger("warn"), info: logger("info"), Debug: logger("error") };
       g.Log = log;
       g.error = log.error;
       g.warn = log.warn;
       g.info = log.info;
       g.Debug = log.Debug;
       if (globalsSpec && globalsSpec.getMessage) {
-        g.getMessage = function (id) { return host("a.message", id); };
+        g.getMessage = method(function (id) { return host("a.message", id); });
       }
     },
     invoke: function (fn, args, readback) {

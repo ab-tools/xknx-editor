@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
@@ -127,6 +128,9 @@ __all__ = [
 ]
 
 
+logger = logging.getLogger(__name__)
+
+
 class _AppNode(DynamicNode):
     """Top wrapper that seeds global param-ref defaults before the app tree evaluates."""
 
@@ -153,6 +157,7 @@ class DynamicTreeBuilder:
         # active, so it must not gate the capture chain (would wrongly disqualify every object under it).
         # This set is shared by reference into the Choose/Repeat nodes and is complete once _build ends.
         self._widget_param_refs: set[str] = set()
+        self._plugin_warned: set[str] = set()
         # Union members share the same memory offset; only one is the "active" overlay at a time.
         # Map each of a union member's parameter-refs to its union siblings' parameter-refs, so a
         # Choose on an inactive union member renders nothing (see ChooseWhenNode). Without this we
@@ -360,9 +365,13 @@ class DynamicTreeBuilder:
             assert pt is not None, (
                 f"ParameterType {param.parameter_type!r} not found in static"
             )
-            assert not pt.plugin, (
-                f"ParameterType {param.parameter_type!r} uses unsupported plugin {pt.plugin!r}"
-            )
+            if pt.plugin and pt.id not in self._plugin_warned:
+                self._plugin_warned.add(pt.id)
+                logger.warning(
+                    "ParameterType %s uses unsupported plugin %s; shown read-only",
+                    pt.id,
+                    pt.plugin,
+                )
             # Record this ref as widget-rendered so Choose/Repeat gates on it count toward activeness.
             self._widget_param_refs.add(elem.ref_id)
             return ParameterRefRefNode(elem, pr, param, pt)
@@ -802,7 +811,8 @@ class DynamicUI:
             except ValueError as exc:
                 raise EncodingError(f"parameter {ref_id}: {exc}") from exc
 
-    def _text_encoding(self) -> str:
+    @property
+    def text_encoding(self) -> str:
         options = self._app.static.options
         encoding = options.text_parameter_encoding if options is not None else None
         return encoding.value if encoding is not None else "iso-8859-1"
@@ -852,7 +862,7 @@ class DynamicUI:
             raise ValueError(f"unknown parameter ref {ref_id!r}")
         if strict:
             try:
-                value = check_value(value, tc, text_encoding=self._text_encoding())
+                value = check_value(value, tc, text_encoding=self.text_encoding)
             except ValueError as exc:
                 text = self._idx.type_error_text(local)
                 raise ParameterValidationError(text or str(exc), ref_id=ref_id) from exc
@@ -892,7 +902,13 @@ class DynamicUI:
             v = scope.get(local_ref)
             return v if v is not None else self._idx.default_value(local_ref)
 
-        return CalculationScope(get=get, qualify=scope.qualify_local)
+        env = self.script_env
+        return CalculationScope(
+            get=get,
+            qualify=scope.qualify_local,
+            locale=env.locale if env is not None else None,
+            text_encoding=self.text_encoding,
+        )
 
     def recalculate(self, ref_ids: Iterable[str]) -> ChangeSet:
         """Run the calculation plans of ``ref_ids`` without changing them; errors are logged."""

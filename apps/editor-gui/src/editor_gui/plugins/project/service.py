@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from editor_gui.concurrency import io_guarded, revision_cached
 from editor_gui.device import Device
+from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui.history import HistoryEntry
 from editor_gui.settings import config_dir
 from xknxeditor.namespaces.intermediate import (
@@ -22,6 +23,7 @@ from xknxeditor.namespaces.intermediate import (
 from xknxeditor.namespaces.intermediate.enable_t import Enable
 from xknxeditor.prod import Application
 from xknxeditor.prod.app_id import parse_app_id
+from xknxeditor.prod.parser_v2.calculation import VALIDATION_FAILED
 from xknxeditor.proj import ProjectService as _ProjectService
 from xknxeditor.proj import ProjectStorageError, ensure_sqlite_writable
 from xknxeditor.proj import import_ga_export as _import_ga_export
@@ -157,6 +159,11 @@ def _co_instance_ref_from_row(
         update_flag=_e(row.update_flag),
         read_on_init_flag=_e(row.read_on_init_flag),
     )
+
+
+def _rejection_text(exc: ValueError) -> str:
+    message = str(exc)
+    return S.VALIDATION_FAILED if message == VALIDATION_FAILED else message
 
 
 def _history_device_id(data: dict[str, Any]) -> int | None:
@@ -1740,10 +1747,24 @@ class ProjectService:
         try:
             self.edit_params(device, [(param_id, value)], mode="edit")
         except ValueError as exc:
-            device.param_errors[param_id] = str(exc)
+            device.param_errors[param_id] = _rejection_text(exc)
+            device.param_inputs[param_id] = value
             raise
         device.param_errors.pop(param_id, None)
+        device.param_inputs.pop(param_id, None)
+        self._retry_rejected_inputs(device)
         self._log_param_tree(device, param_id)
+
+    def _retry_rejected_inputs(self, device: Device) -> None:
+        """Submit the inputs still shown in rejected fields again, as after every edit."""
+        for ref_id, value in list(device.param_inputs.items()):
+            try:
+                self.edit_params(device, [(ref_id, value)], mode="edit")
+            except ValueError as exc:
+                device.param_errors[ref_id] = _rejection_text(exc)
+                continue
+            device.param_errors.pop(ref_id, None)
+            device.param_inputs.pop(ref_id, None)
 
     def param_error(self, node_id: int, param_id: str) -> str | None:
         """The message of the last rejected edit of a parameter, until it is edited again."""

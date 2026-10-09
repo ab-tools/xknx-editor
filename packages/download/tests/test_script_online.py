@@ -14,6 +14,7 @@ from xknx.telegram.apci import (
     APCI,
     DeviceDescriptorRead,
     DeviceDescriptorResponse,
+    PropertyValueRead,
 )
 from xknx.telegram.tpci import TConnect, TDataIndividual
 
@@ -165,7 +166,7 @@ def test_coap_is_not_implemented(
 
 class _SlowDevice(FakeDevice):
     async def request(self, payload: APCI, expected: type[APCI] | None) -> Telegram:
-        if isinstance(payload, DeviceDescriptorRead) and self.slow:
+        if isinstance(payload, PropertyValueRead) and self.slow:
             await asyncio.sleep(60)
         return await super().request(payload, expected)
 
@@ -181,4 +182,95 @@ def test_abort_interrupts_a_waiting_call(
     device.slow = True
     threading.Timer(0.2, abort.request).start()
     with pytest.raises(AbortRequested):
+        host.read_property(0, 56, 0, 1, 1)
+
+
+def test_connect_negotiates_apdu_without_authorize(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(descriptor=0x07B0)
+    device.properties[(0, 56)] = (254).to_bytes(2, "big")
+    host, _ = _host(loop, monkeypatch, device)
+    host.connect()
+    assert host.get_max_apdu_length() == 239
+    assert device.authorize_keys == []
+
+
+def test_interface_limit_applies(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(descriptor=0x07B0)
+    device.properties[(0, 56)] = (254).to_bytes(2, "big")
+    manager = _Manager(device)
+    monkeypatch.setattr(script_online, "management_session", lambda *a, **k: manager)
+    session = OnlineSession(
+        None,  # type: ignore[arg-type]
+        DEVICE,
+        mask_version=0x07B0,
+        interface_max_apdu_length=200,
+    )
+    host = OnlineHost(
+        session, lambda c: asyncio.run_coroutine_threadsafe(c, loop), AbortToken()
+    )
+    assert host.get_max_apdu_length() == 200
+    host.connect()
+    assert host.get_max_apdu_length() == 200
+
+
+def test_connect_is_idempotent_and_caches_the_descriptor(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(descriptor=0x07B0)
+    host, manager = _host(loop, monkeypatch, device)
+    with pytest.raises(HostError) as err:
         host.read_device_descriptor0()
+    assert err.value.number == -2147467261
+    with pytest.raises(HostError) as err:
+        host.read_property(0, 56, 0, 1, 1)
+    assert (err.value.message, err.value.number) == ("Not connected", -2146233079)
+    host.connect()
+    sent = len(device.sent)
+    host.connect()
+    assert manager.opened == 1
+    assert host.read_device_descriptor0() == 0x07B0
+    assert len(device.sent) == sent
+    host.disconnect()
+    with pytest.raises(HostError):
+        host.read_device_descriptor0()
+
+
+def test_locate_uses_declared_objects_then_scans(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = FakeDevice(object_types={0: 0, 1: 1, 6: 4}, descriptor=0x07B0)
+    manager = _Manager(device)
+    monkeypatch.setattr(script_online, "management_session", lambda *a, **k: manager)
+    session = OnlineSession(
+        None,  # type: ignore[arg-type]
+        DEVICE,
+        object_types={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 6},
+        locale="de-DE",
+    )
+    host = OnlineHost(
+        session, lambda c: asyncio.run_coroutine_threadsafe(c, loop), AbortToken()
+    )
+    host.connect()
+    sent = len(device.sent)
+    assert host.locate_interface_object(4, 1) == 4
+    assert len(device.sent) == sent
+    assert host.locate_interface_object(4, 2) == 6
+    with pytest.raises(HostError) as err:
+        host.locate_interface_object(0, 0)
+    assert (
+        err.value.message
+        == "Die ausgewählte Geräte-Ressource ist zurzeit nicht verfügbar."
+    )
+    with pytest.raises(HostError) as err:
+        host.read_property(99, 1, 0, 1, 1)
+    assert err.value.message.endswith(
+        "Lesen von Property(99/1, 1, 1) fehlgeschlagen: Empty response"
+    )
+    with pytest.raises(HostError) as err:
+        host.read_function_property(255, 255, 0)
+    assert err.value.number == -2147467262
+    assert "System.Int32" in err.value.message

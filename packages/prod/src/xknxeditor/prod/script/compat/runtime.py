@@ -209,6 +209,12 @@ def _locale(name: str) -> _Locale:
     )
 
 
+def number_separators(locale: str | None) -> tuple[str, str]:
+    """Decimal and group separator of ``locale`` (``None``: the system locale)."""
+    loc = _locale(locale or system_locale())
+    return loc.decimal, loc.group
+
+
 def _format_date(fmt: str, loc: _Locale, f: list[int]) -> str:
     y, mo, d, wd, h, mi, s = f
     tokens = {

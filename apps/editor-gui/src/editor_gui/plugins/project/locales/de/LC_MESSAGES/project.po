@@ -1111,8 +1111,8 @@ msgstr "Einfügen"
 msgid "This action can only be performed when the individual address of the device is already downloaded."
 msgstr "Diese Aktion kann nur ausgeführt werden, wenn die physikalische Adresse des Geräts bereits heruntergeladen wurde."
 
-msgid "Button {0} executed."
-msgstr "Schaltfläche {0} ausgeführt."
+msgid "Button {0} executed. "
+msgstr "Schaltfläche {0} ausgeführt. "
 
 msgid "A parameter script is running for this device."
 msgstr "Für dieses Gerät läuft ein Parameterskript."
@@ -1140,3 +1140,6 @@ msgstr "Wird abgebrochen…"
 
 msgid "No connection to the bus."
 msgstr "Keine Verbindung zum Bus."
+
+msgid "Parameter value cannot be set, because validation failed."
+msgstr "Der Parameterwert kann nicht gesetzt werden, da die Validierung fehlgeschlagen ist."

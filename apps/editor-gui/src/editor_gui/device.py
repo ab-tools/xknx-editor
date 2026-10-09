@@ -215,6 +215,10 @@ class Device:
     param_errors: dict[str, str] = field(
         default_factory=dict[str, str], repr=False, compare=False, init=False
     )
+    # The rejected input per parameter, kept in its field and submitted again after later edits.
+    param_inputs: dict[str, str] = field(
+        default_factory=dict[str, str], repr=False, compare=False, init=False
+    )
 
     def __post_init__(self) -> None:
         self._ensure_dynamic_ui()

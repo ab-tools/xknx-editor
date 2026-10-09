@@ -268,6 +268,15 @@ class ConnectionPlugin:
             else:
                 self._gateway_info = None
             self._state = ConnectionState.CONNECTED
+            interface_apdu: int | None = None
+            try:
+                interface_apdu = await self._interface.read_max_apdu_length()
+            except Exception as feature_err:
+                self._log.debug(
+                    "interface max APDU length unavailable",
+                    error=f"{type(feature_err).__name__}: {feature_err}",
+                )
+            self._api.connection.interface_max_apdu_length = interface_apdu
             self._api.connection.set_connection(self._xknx, asyncio.get_running_loop())
             self._api.connection.dispatch_connected()
             self._log.info("connected", target=self._connection_target)

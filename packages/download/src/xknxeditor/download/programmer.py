@@ -75,6 +75,8 @@ DEFAULT_MAX_APDU_LENGTH = 15
 FREE_ACCESS_KEY = 0xFFFFFFFF
 # Upper bound used when negotiating the APDU length up from the default.
 MAX_NEGOTIATED_APDU_LENGTH = 254
+# Upper bound for device communication through an interface.
+MAX_COMMUNICATION_APDU_LENGTH = 239
 # Device Object property carrying the device's maximum APDU length (2 octets).
 PID_MAX_APDU_LENGTH = 56
 # Property id carrying an interface object's type (PID_OBJECT_TYPE).
@@ -633,16 +635,16 @@ class DeviceProgrammer:
         return self._function_property_result(telegram, object_index, property_id)
 
     async def function_property_raw(
-        self, object_index: int, property_id: int, data: bytes | None
+        self, object_index: int, property_id: int, data: bytes, *, command: bool
     ) -> bytes:
-        """A Function Property command (``data``) or state read (``None``) returning the
-        response's return code octet followed by its state data, without judging it."""
+        """A Function Property command or state read returning the response's return code
+        octet followed by its state data, without judging it."""
         request: APCI = (
-            FunctionPropertyStateRead(
-                object_index=object_index, property_id=property_id
+            FunctionPropertyCommand(
+                object_index=object_index, property_id=property_id, data=data
             )
-            if data is None
-            else FunctionPropertyCommand(
+            if command
+            else FunctionPropertyStateRead(
                 object_index=object_index, property_id=property_id, data=data
             )
         )

@@ -54,6 +54,7 @@ class _Connection:
         self.loop = loop
         self.xknx = object()
         self.master = None
+        self.interface_max_apdu_length: int | None = 248
         self.busy: tuple[str, str] | None = None
 
     def not_connected(self, op: str) -> bool:

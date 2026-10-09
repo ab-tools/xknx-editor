@@ -39,6 +39,8 @@ class ConnectionService:
         # Global KNX master data (mask-version default procedures), injected at
         # startup. Required to resolve an UNLOAD scope and default/merged procedures.
         self.master: MasterData | None = None
+        # Maximum APDU length the connected interface reports, if it does.
+        self.interface_max_apdu_length: int | None = None
         # Keyring service (KNX Data Secure), injected at startup. Used to look up a device's tool
         # key so a point-to-point download/test is secured when the device was commissioned secure.
         self.keyring: KeyringService | None = None
@@ -158,6 +160,8 @@ class ConnectionService:
     ) -> None:
         self._xknx = xknx
         self._loop = loop
+        if xknx is None:
+            self.interface_max_apdu_length = None
 
     @property
     def xknx(self) -> XKNX | None:

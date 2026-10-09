@@ -142,6 +142,100 @@ def from_js(js: object, tc: object) -> str:
     return str(js)
 
 
+class ScriptValueError(ValueError):
+    """A value a script or calculation sets is rejected, with its message and error number."""
+
+    def __init__(self, message: str, number: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.number = number
+
+
+def _format_error(locale: str | None) -> ScriptValueError:
+    from .texts import COR_E_FORMAT, dotnet_text
+
+    return ScriptValueError(dotnet_text("format", locale), COR_E_FORMAT)
+
+
+def _range_error(lo: object, hi: object, value: object) -> ScriptValueError:
+    from .texts import VALUE_ERROR_NUMBER, VALUE_OUT_OF_RANGE
+
+    def text(v: object) -> str:
+        return dotnet_number_to_string(v) if isinstance(v, float) else str(v)
+
+    return ScriptValueError(
+        VALUE_OUT_OF_RANGE.format(text(lo), text(hi), text(value)), VALUE_ERROR_NUMBER
+    )
+
+
+def _dotnet_double(text: str, locale: str | None) -> float:
+    """``Convert.ToDouble(string)`` with the number format of ``locale``."""
+    from .compat.runtime import number_separators
+
+    decimal, group = number_separators(locale)
+    t = text.strip().replace(group, "")
+    if decimal != ".":
+        if "." in t:
+            raise ValueError(text)
+        t = t.replace(decimal, ".")
+    if not re.fullmatch(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", t):
+        raise ValueError(text)
+    return float(t)
+
+
+def coerce_script_value(
+    js: object,
+    tc: object,
+    *,
+    locale: str | None = None,
+    text_encoding: str = "latin-1",
+) -> str:
+    """Convert and check a value a script or calculation sets, raising the errors scripts see."""
+    from .texts import ENUM_VALUE_NOT_FOUND, TEXT_TOO_LONG, VALUE_ERROR_NUMBER
+
+    if isinstance(tc, _INTEGER_TYPES):
+        if isinstance(js, bool):
+            n = int(js)
+        elif isinstance(js, int):
+            n = js
+        elif isinstance(js, float):
+            if not math.isfinite(js):
+                raise _format_error(locale)
+            n = round(js)
+        elif isinstance(js, str) and _INT_LITERAL.match(js):
+            n = int(js)
+        else:
+            raise _format_error(locale)
+        if isinstance(tc, ParameterTypeTypeRestriction):
+            if all(e.value != n for e in tc.enumeration):
+                raise ScriptValueError(ENUM_VALUE_NOT_FOUND, VALUE_ERROR_NUMBER)
+        elif not tc.min_inclusive <= n <= tc.max_inclusive:
+            raise _range_error(tc.min_inclusive, tc.max_inclusive, n)
+        return str(n)
+    if isinstance(tc, ParameterTypeTypeFloat):
+        if isinstance(js, (bool, int, float)):
+            f = float(js)
+        elif isinstance(js, str):
+            try:
+                f = _dotnet_double(js, locale)
+            except ValueError:
+                raise _format_error(locale) from None
+        else:
+            raise _format_error(locale)
+        if not math.isfinite(f):
+            raise _format_error(locale)
+        if not tc.min_inclusive <= f <= tc.max_inclusive:
+            raise _range_error(tc.min_inclusive, tc.max_inclusive, f)
+        return str(int(f)) if f.is_integer() else repr(f)
+    value = from_js(js, tc)
+    if (
+        isinstance(tc, ParameterTypeTypeText)
+        and len(value.encode(text_encoding, errors="replace")) > tc.size_in_bit // 8
+    ):
+        raise ScriptValueError(TEXT_TOO_LONG, VALUE_ERROR_NUMBER)
+    return check_value(value, tc, text_encoding=text_encoding)
+
+
 def check_value(value: str, tc: object, *, text_encoding: str = "latin-1") -> str:
     """Strict validation of a value against its parameter type; returns the normalized value."""
     if isinstance(tc, ParameterTypeTypeNumber):

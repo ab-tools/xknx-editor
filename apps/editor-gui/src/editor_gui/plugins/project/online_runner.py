@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Any
 from xknx.telegram import IndividualAddress
 
 from editor_gui.plugins.project.strings import S
-from xknxeditor.download.merge import mask_authorize_levels
+from xknxeditor.download.errors import DownloadError
+from xknxeditor.download.scope import mask_object_types
 from xknxeditor.download.script_online import OnlineHost, OnlineSession
 from xknxeditor.prod.script import ScriptAborted, ScriptError
 from xknxeditor.prod.script.button import ParameterAccess, run_button
@@ -35,6 +36,16 @@ def _mask_version(device: Device) -> int | None:
         return int(text.removeprefix("MV-"), 16)
     except ValueError:
         return None
+
+
+def _object_types(conn: ConnectionService, device: Device) -> dict[int, int]:
+    """Interface objects the device's mask declares, by index."""
+    if conn.master is None:
+        return {}
+    try:
+        return mask_object_types(conn.master.raw, device.app.program.mask_version)
+    except DownloadError:
+        return {}
 
 
 class OnlineButtonRunner:
@@ -77,18 +88,15 @@ class OnlineButtonRunner:
             conn.end_operation()
             return None
         mask = _mask_version(device)
-        master = conn.master
         session = OnlineSession(
             conn.xknx,
             IndividualAddress(device.individual_address),
             security=conn.security_for(device),
             connectionless=run.button.online == "ConnectionLess",
             mask_version=mask,
-            authorize=bool(
-                master is not None
-                and mask is not None
-                and mask_authorize_levels(master.raw, device.app.program.mask_version)
-            ),
+            interface_max_apdu_length=conn.interface_max_apdu_length,
+            locale=ui.script_env.locale if ui.script_env is not None else None,
+            object_types=_object_types(conn, device),
         )
         online = OnlineHost(session, self._run_coroutine, run.abort)
         node_id = device.node_id
