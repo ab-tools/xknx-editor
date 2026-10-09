@@ -241,7 +241,15 @@
     if (o === null || o === undefined) {
       throw jerr(NTypeError, "Unable to get property '" + keyName(name) + "' of undefined or null reference", -2146823281);
     }
+    var raw = o.__xk_raw;
+    if (raw !== undefined && hasOwn.call(raw, name)) return raw[name];
     return o[name];
+  }
+
+  function cget(o, k) {
+    var raw = o === null || o === undefined ? undefined : o.__xk_raw;
+    if (raw !== undefined && hasOwn.call(raw, k)) return raw[k];
+    return get(o, k);
   }
 
   function callError(f, name) {
@@ -1317,7 +1325,6 @@
   }
 
   function typeOf(v) {
-    if (typeof v === "function" && typeof v.__xk_typeof === "string") return v.__xk_typeof;
     if (typeof v === "function" && v.__xk_unknown === true) return "unknown";
     return typeof v;
   }
@@ -1393,7 +1400,7 @@
   var api = {
     tof: typeOf, ae: argsEnter, ax: argsExit,
     typeError: function (message, number) { return jerr(NTypeError, message, number); },
-    add: add, key: key, get: get, mth: mth, call: callMember, fcall: callFunction, tk: tick,
+    add: add, key: key, get: get, mth: mth, cget: cget, call: callMember, fcall: callFunction, tk: tick,
     fi: forInTarget, fiter: forInIterator, ctor: ctor, i: int64, dn: dropNames,
     ev: evalSource, re: literalRegex, err: function (e) {
       if (e === ABORT) throw e;

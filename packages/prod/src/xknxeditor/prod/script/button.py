@@ -11,6 +11,7 @@ from .errors import (
     CLASS_NOT_AUTOMATION,
     COR_E_EXCEPTION,
     COR_E_KEYNOTFOUND,
+    COR_E_TARGETINVOCATION,
     HostError,
 )
 from .sandbox import AbortToken, HostFunction, ScriptContext
@@ -110,6 +111,10 @@ class ParameterAccess:
     def _undo_rollback(self) -> None:
         if self._groups:
             self._revert(self._groups.pop()[1])
+        raise HostError(
+            dotnet_text("target_invocation", self._locale),
+            number=COR_E_TARGETINVOCATION,
+        )
 
     def _undo_commit(self) -> None:
         if self._groups:

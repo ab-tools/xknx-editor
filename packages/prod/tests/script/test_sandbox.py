@@ -14,7 +14,7 @@ from xknxeditor.prod.script import (
     ScriptContext,
     ScriptError,
 )
-from xknxeditor.prod.script.errors import COR_E_KEYNOTFOUND
+from xknxeditor.prod.script.errors import COR_E_KEYNOTFOUND, COR_E_TARGETINVOCATION
 
 
 def _device_host(store: dict[str, Any]) -> dict[str, Any]:
@@ -155,25 +155,41 @@ def test_get_message_global() -> None:
 
 def test_progress_and_with_undo() -> None:
     calls: list[str] = []
+
+    def rollback() -> None:
+        calls.append("rollback")
+        raise HostError("wrapped", number=COR_E_TARGETINVOCATION)
+
     host: dict[str, Any] = {
         "g.text": lambda t: calls.append(f"text:{t}"),
         "g.progress": lambda v: calls.append(f"progress:{v}"),
         "g.canceled": lambda: False,
         "d.undoBegin": lambda d: calls.append(f"begin:{d}"),
         "d.undoCommit": lambda: calls.append("commit"),
-        "d.undoRollback": lambda: calls.append("rollback"),
+        "d.undoRollback": rollback,
     }
     ctx = ScriptContext(
         host=host,
         script="""
         function h(device, online, progress) {
             progress.setText("x"); progress.setProgress(12.5);
-            device.withUndo("ok", function () {});
-            try { device.withUndo("bad", function () { throw new Error("no"); }); } catch (e) {}
-            return progress.isCanceled();
+            var r = [device.withUndo("ok", function () { return 7; }), device.withUndo(5, 5)];
+            try { device.withUndo("bad", function () { throw new Error("no"); }); } catch (e) { r.push(e.message, e.number); }
+            try { device.withUndo("x"); } catch (e) { r.push(e.number); }
+            try { device.withUndo("x", function () {}, 1); } catch (e) { r.push(e.number); }
+            r.push(progress.isCanceled());
+            return r;
         }""",
     )
-    assert ctx.invoke("h", [DEVICE, None, {"$host": "progress"}]).value is False
+    assert ctx.invoke("h", [DEVICE, None, {"$host": "progress"}]).value == [
+        None,
+        None,
+        "wrapped",
+        COR_E_TARGETINVOCATION,
+        -2146828283,
+        -2146827838,
+        False,
+    ]
     assert calls == [
         "text:x",
         "progress:12.5",
@@ -215,7 +231,11 @@ def test_nested_context_inside_host_callback() -> None:
 
 def test_host_methods_take_exact_argument_counts() -> None:
     ctx = ScriptContext(
-        host={"o.readProperty": lambda *a: list(a), "g.text": lambda t: None},
+        host={
+            "o.readProperty": lambda *a: list(a),
+            "g.text": lambda t: None,
+            "o.connect": lambda: None,
+        },
         script="""
         function e(f) { try { f(); return "none"; } catch (x) { return x.name + x.number; } }
         function h(online, progress) {
@@ -235,3 +255,33 @@ def test_host_methods_take_exact_argument_counts() -> None:
         "TypeError-2146828283,TypeError-2146827838,5,TypeError-2146828283,"
         "undefined,unknown,unknown"
     )
+
+
+def test_parameterless_host_methods_run_on_read() -> None:
+    calls: list[str] = []
+
+    def not_connected() -> None:
+        raise HostError("Not connected")
+
+    ctx = ScriptContext(
+        host={
+            "o.connect": lambda: calls.append("connect"),
+            "o.disconnect": lambda: calls.append("disconnect"),
+            "o.getMaxApduLength": lambda: 55,
+            "o.readDeviceDescriptor0": not_connected,
+            "o.restart": not_connected,
+            "g.canceled": lambda: False,
+        },
+        script="""
+        function h(online, progress) {
+            var r = [typeof online.connect, typeof online.getMaxApduLength, typeof online.readDeviceDescriptor0,
+                typeof online.restart, typeof progress.isCanceled, typeof online.disconnect];
+            online.connect();
+            online["disconnect"]();
+            return r.join(",");
+        }
+        """,
+    )
+    value = ctx.invoke("h", [{"$host": "online"}, {"$host": "progress"}]).value
+    assert value == "undefined,number,unknown,unknown,boolean,undefined"
+    assert calls == ["connect", "disconnect", "connect", "disconnect"]

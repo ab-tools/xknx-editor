@@ -55,6 +55,11 @@ _DOTNET: dict[str, dict[str, str]] = {
         "de": "Die Eingabezeichenfolge hat das falsche Format.",
         "nl": "De indeling van de invoertekenreeks is onjuist.",
     },
+    "target_invocation": {
+        "en": "Exception has been thrown by the target of an invocation.",
+        "de": "Ein Aufrufziel hat einen Ausnahmefehler verursacht.",
+        "nl": "Er is een uitzondering opgetreden tijdens het uitvoeren van een aanroep.",
+    },
 }
 
 

@@ -531,7 +531,7 @@
         }
         var kt = temp();
         var keyText = emit(c.property);
-        return withArgs("__xk.call(" + o1 + ",__xk.get(" + o2 + "," + kt + "=__xk.key(" + keyText + "))," + kt,
+        return withArgs("__xk.call(" + o1 + ",__xk.cget(" + o2 + "," + kt + "=__xk.key(" + keyText + "))," + kt,
           emitArgs(node));
       }
       if (c.type === "Identifier") {

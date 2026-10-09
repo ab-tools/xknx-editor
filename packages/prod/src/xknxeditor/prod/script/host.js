@@ -84,6 +84,29 @@
     return o;
   }
 
+  // Reading a parameterless method as a property invokes it; if that fails the method itself is read.
+  function getters(o, names) {
+    var raw = {};
+    for (var i = 0; i < names.length; i++) {
+      (function (n) {
+        var f = o[n];
+        raw[n] = f;
+        defineProperty(o, n, {
+          get: function () {
+            try {
+              return f.call(o);
+            } catch (e) {
+              if (e === ABORT) throw e;
+              return f;
+            }
+          }
+        });
+      })(names[i]);
+    }
+    defineProperty(o, "__xk_raw", { value: raw });
+    return o;
+  }
+
   function param(ref) {
     if (ref === null || ref === undefined) return null;
     var p = {};
@@ -106,16 +129,17 @@
         var m = host("d.message", id);
         return m === null ? undefined : m;
       }, 1),
-      withUndo: function (description, fn) {
+      withUndo: arity(function (description, fn) {
+        if (typeof fn !== "function") return;
         host("d.undoBegin", description === undefined ? "" : String(description));
         try {
           fn();
         } catch (e) {
-          if (e !== ABORT) host("d.undoRollback");
-          throw e;
+          if (e === ABORT) throw e;
+          host("d.undoRollback");
         }
         host("d.undoCommit");
-      }
+      }, 2)
     };
     methods(d);
     defineProperty(d, "ApplicationProgramName", { get: function () { return host("d.appName"); } });
@@ -143,21 +167,21 @@
         return arity(function () {
           var a = ["o." + n];
           for (var j = 0; j < arguments.length; j++) a.push(arguments[j]);
-          return fnApply.call(host, null, a);
+          var r = fnApply.call(host, null, a);
+          return r === null ? undefined : r;
         }, ONLINE_ARITY[n]);
       })(ONLINE[i]);
     }
     methods(o);
-    defineProperty(o.connect, "__xk_typeof", { value: "undefined" });
-    return o;
+    return getters(o, ["connect", "disconnect", "readDeviceDescriptor0", "getMaxApduLength", "restart"]);
   }
 
   function progress() {
-    return methods({
+    return getters(methods({
       setProgress: arity(function (v) { host("g.progress", Number(v)); }, 1),
       setText: arity(function (t) { host("g.text", t === undefined ? "" : String(t)); }, 1),
       isCanceled: arity(function () { return host("g.canceled"); }, 0)
-    });
+    }), ["isCanceled"]);
   }
 
   function logger(level) {
