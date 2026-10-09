@@ -10,14 +10,14 @@ most recently used ones, and reloads them when it is used again.
 
 from __future__ import annotations
 
-import gc
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING
 
 from xknxeditor.namespaces import detect_version
+
+from .gc_pause import gc_paused
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -95,13 +95,13 @@ class Application:
             program = self._program
             if program is None:
                 assert self._reloader is not None
-                with _gc_paused():
+                with gc_paused():
                     program = self._reloader()
                 self._program = program
             if with_tree and self._tree_builder is None:
                 from .parser_v2.dynamic import DynamicTreeBuilder as _DynamicTreeBuilder
 
-                with _gc_paused():
+                with gc_paused():
                     self._tree_builder = _DynamicTreeBuilder(program)
             self._mark_used()
             return program, self._tree_builder
@@ -154,18 +154,6 @@ class Application:
         from .parser_v2.dynamic import DynamicUI as _DynamicUI
 
         return _DynamicUI(program, tree_builder=tree_builder)
-
-
-@contextmanager
-def _gc_paused() -> Generator[None]:
-    """Pause the cyclic garbage collector while millions of long-lived objects are created."""
-    enabled = gc.isenabled()
-    gc.disable()
-    try:
-        yield
-    finally:
-        if enabled:
-            gc.enable()
 
 
 def _programs(knx: Knx) -> Iterator[ApplicationProgram]:

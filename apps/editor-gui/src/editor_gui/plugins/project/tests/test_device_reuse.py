@@ -76,6 +76,39 @@ def test_changed_device_is_rebuilt(tmp_path: Path) -> None:
     proj.close()
 
 
+def test_undo_after_in_place_edit_rebuilds_device(tmp_path: Path) -> None:
+    proj, (a, _b) = _project(tmp_path)
+    device = next(d for d in proj.devices if d.node_id == a)
+    co = next(c for c in device.com_objects if c.db_id is not None)
+    original = co.flags.read
+    proj.set_flag(device, co.id, "read", not original)
+    assert proj.undo()
+    rebuilt = next(d for d in proj.devices if d.node_id == a)
+    assert rebuilt is not device
+    restored = rebuilt.find_com_object(co.id)
+    assert restored is not None
+    assert restored.flags.read == original
+    proj.close()
+
+
+def test_parameter_edited_in_place_is_rebuilt(tmp_path: Path) -> None:
+    proj, (a, b) = _project(tmp_path)
+    before = {d.node_id: d for d in proj.devices}
+    ref = next(
+        node.ref_id
+        for node in _walk(before[a].get_ui())
+        if isinstance(node, UiParameter)
+    )
+    before[a].apply_param_values({ref: "1"})
+    assert proj.set_device_individual_address(
+        b, before[b].individual_address, "1.1.202"
+    )
+    after = {d.node_id: d for d in proj.devices}
+    assert after[a] is not before[a]
+    assert after[b] is before[b]
+    proj.close()
+
+
 def _walk(nodes: Sequence[UiNode]) -> Iterator[UiNode]:
     for node in nodes:
         yield node

@@ -1,14 +1,12 @@
 """GUI project facade: lazy device view over ProjectService with selection and pub/sub."""
 
-import gc
 import hashlib
 import os
 import platform
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -25,6 +23,7 @@ from xknxeditor.namespaces.intermediate import (
 from xknxeditor.namespaces.intermediate.enable_t import Enable
 from xknxeditor.prod import Application
 from xknxeditor.prod.app_id import parse_app_id
+from xknxeditor.prod.gc_pause import gc_paused
 from xknxeditor.prod.parser_v2.calculation import VALIDATION_FAILED
 from xknxeditor.proj import ProjectService as _ProjectService
 from xknxeditor.proj import ProjectStorageError, ensure_sqlite_writable
@@ -340,18 +339,6 @@ class DeviceProduct:
             order_number=product.order_number or "",
             manufacturer_name=product.manufacturer_name or "",
         )
-
-
-@contextmanager
-def _gc_paused() -> Generator[None]:
-    """Pause the cyclic garbage collector, restoring its previous state afterwards."""
-    enabled = gc.isenabled()
-    gc.disable()
-    try:
-        yield
-    finally:
-        if enabled:
-            gc.enable()
 
 
 class ProjectService:
@@ -738,7 +725,7 @@ class ProjectService:
                     working=str(working),
                 )
                 self._copy_atomic(path, working)
-            with _gc_paused():
+            with gc_paused():
                 new_pid = self._svc.open(working)
                 self._pid = new_pid
                 self._generation += 1
@@ -1036,13 +1023,15 @@ class ProjectService:
             return None
 
     def _reuse_device(self, row: Any, previous: dict[int, Device]) -> Device | None:
-        """The already built device for ``row`` if nothing it was built from has changed since.
+        """The already built device for ``row`` if it was not changed in place and nothing it was
+        built from has changed since.
 
         Only its name, description and individual address are refreshed then. Rebuilding every
         device after e.g. an address change would load every application again."""
         old = previous.get(row.id)
         if (
             old is None
+            or old.edited_in_place
             or old.app is not self._app_cache.get(row.hardware2program_ref_id or "")
             or self._build_keys.get(row.id) != _device_source_key(row)
         ):
@@ -1069,7 +1058,7 @@ class ProjectService:
                 self._log.debug("building devices", total=total)
                 # Building creates millions of long-lived objects; the cyclic garbage collector would
                 # rescan all of them over and over, which dominates the load time.
-                with _gc_paused():
+                with gc_paused():
                     for i, row in enumerate(rows, start=1):
                         device = self._reuse_device(
                             row, previous
@@ -2356,6 +2345,7 @@ class ProjectService:
         # live dynamic UI — exactly what a rebuild reconstructs from the DB — then bump non-structurally
         # so revision-keyed panels (Health/Cockpit) refresh.
         setattr(co.flags, flag_name, value)
+        device.edited_in_place = True
         row = self._find_com_object_row(co.db_id)
         if row is not None:
             coir = _co_instance_ref_from_row(row, ref_id=co_id) or ComObjectInstanceRef(
