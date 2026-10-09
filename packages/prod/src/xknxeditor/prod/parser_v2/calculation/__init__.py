@@ -1,4 +1,13 @@
+"""ParameterCalculation and ParameterValidation execution."""
+
 from __future__ import annotations
+
+import json
+import logging
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, cast
 
 from xknxeditor.namespaces.intermediate.parameter_calculation_t import (
     ParameterCalculation,
@@ -7,50 +16,184 @@ from xknxeditor.namespaces.intermediate.parameter_calculation_t_language import 
     ParameterCalculationLanguage,
 )
 
-from ._js import eval_inline, eval_named_func
+from ...script import CalculationError, ScriptContext, ScriptError
+from ...script.values import from_js, to_js
+
+if TYPE_CHECKING:
+    from ...script.compat.runtime import JScriptEnv
+    from ..application_indexer import ApplicationIndexer
+
+log = logging.getLogger(__name__)
+
+ChangeSet = dict[str, tuple[str | None, str | None]]
+
+_IDENT = re.compile(r"^[A-Za-z_$][\w$]*$")
 
 
-def evaluate_lr(
-    calc: ParameterCalculation, l_values: dict[str, str], script: str | None = None
-) -> dict[str, str]:
-    """Run the L→R transform; maps {alias: value} inputs to R-param {alias: value}."""
+@dataclass
+class Journal:
+    """Values written during one change, with their previous explicit values."""
+
+    read: Callable[[str], str | None]
+    explicit: Callable[[str], str | None]
+    write: Callable[[str, str | None], None]
+    before: dict[str, tuple[str | None, str | None]] = field(
+        default_factory=dict[str, tuple[str | None, str | None]]
+    )
+
+    def set(self, ref_id: str, value: str) -> None:
+        if ref_id not in self.before:
+            self.before[ref_id] = (self.read(ref_id), self.explicit(ref_id))
+        self.write(ref_id, value)
+
+    def rollback(self) -> None:
+        for ref_id, (_, explicit) in reversed(self.before.items()):
+            self.write(ref_id, explicit)
+        self.before.clear()
+
+    def changes(self) -> ChangeSet:
+        out: ChangeSet = {}
+        for ref_id, (old, _) in self.before.items():
+            new = self.read(ref_id)
+            if new != old:
+                out[ref_id] = (old, new)
+        return out
+
+
+@dataclass
+class CalculationScope:
+    """Parameter access inside the scope (application or module instance) of a change."""
+
+    get: Callable[[str], str | None]
+    qualify: Callable[[str], str]
+
+
+def _alias(idx: ApplicationIndexer, pr: Any) -> str:
+    return pr.alias_name or idx.parameter_name(pr.ref_id) or pr.ref_id
+
+
+def _as_dict(value: object) -> dict[str, Any]:
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
+
+
+def _context_object(text: str | None, calc_id: str) -> dict[str, Any]:
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except ValueError:
+        log.warning("invalid transformation parameters in %s: %r", calc_id, text)
+        return {}
+    return _as_dict(value)
+
+
+_vbscript_warned: set[str] = set()
+
+
+def run_calculations(
+    idx: ApplicationIndexer,
+    local_ref: str,
+    scope: CalculationScope,
+    journal: Journal,
+    env: JScriptEnv | None,
+    *,
+    raise_errors: bool,
+) -> None:
+    """Run the calculation plan a change of ``local_ref`` triggers."""
+    for calc, direction in idx.calculation_plan(local_ref):
+        try:
+            _run_one(idx, calc, direction, scope, journal, env)
+        except CalculationError:
+            if raise_errors:
+                raise
+            log.warning("parameter calculation %s failed", calc.id, exc_info=True)
+
+
+def _run_one(
+    idx: ApplicationIndexer,
+    calc: ParameterCalculation,
+    direction: str,
+    scope: CalculationScope,
+    journal: Journal,
+    env: JScriptEnv | None,
+) -> None:
     if calc.language == ParameterCalculationLanguage.VBSCRIPT:
-        raise NotImplementedError(f"VBScript calculation {calc.id!r}")
-    r_names = [pr.alias_name or pr.ref_id for pr in calc.rparameters.parameter_ref_ref]
-    if calc.lrtransformation_func:
-        assert script is not None, (
-            f"calc {calc.id!r} has LRTransformationFunc but no Script block"
-        )
-        return eval_named_func(
-            script,
-            calc.lrtransformation_func,
-            calc.lrtransformation_parameters,
-            l_values,
-            r_names,
-        )
-    if calc.lrtransformation:
-        return eval_inline(calc.lrtransformation, l_values, r_names)
-    return {}
+        if calc.id not in _vbscript_warned:
+            _vbscript_warned.add(calc.id)
+            log.warning("VBScript parameter calculation %s is not supported", calc.id)
+        return
+    lr = direction == "LR"
+    ins = (calc.lparameters if lr else calc.rparameters).parameter_ref_ref
+    outs = (calc.rparameters if lr else calc.lparameters).parameter_ref_ref
+    func = calc.lrtransformation_func if lr else calc.rltransformation_func
+    inline = calc.lrtransformation if lr else calc.rltransformation
+    params = (
+        calc.lrtransformation_parameters if lr else calc.rltransformation_parameters
+    )
+    inputs = {
+        _alias(idx, pr): to_js(scope.get(pr.ref_id), idx.type_of(pr.ref_id))
+        for pr in ins
+    }
+    output = {
+        _alias(idx, pr): to_js(scope.get(pr.ref_id), idx.type_of(pr.ref_id))
+        for pr in outs
+    }
+    host = {"a.message": idx.message_text}
+    jscript: Any = env if env is not None else True
+    try:
+        if func:
+            ctx = ScriptContext(
+                script=idx.script or "", get_message=True, host=host, jscript=jscript
+            )
+            result = ctx.invoke(
+                func, [inputs, output, _context_object(params, calc.id)], readback=[1]
+            )
+            computed = _as_dict(result.readback[0])
+        elif inline:
+            computed = _run_inline(inline, inputs, output, host, jscript)
+        else:
+            return
+    except ScriptError as exc:
+        raise CalculationError(
+            f"Scripting engine returned with error '{exc.message}'.",
+            calculation_id=calc.id,
+        ) from exc
+    for pr in outs:
+        alias = _alias(idx, pr)
+        if alias not in computed or computed[alias] is None:
+            continue
+        try:
+            value = from_js(computed[alias], idx.type_of(pr.ref_id))
+        except ValueError as exc:
+            raise CalculationError(
+                f"Scripting engine returned with error '{exc}'.", calculation_id=calc.id
+            ) from exc
+        if value != scope.get(pr.ref_id):
+            journal.set(scope.qualify(pr.ref_id), value)
 
 
-def evaluate_rl(
-    calc: ParameterCalculation, r_values: dict[str, str], script: str | None = None
-) -> dict[str, str]:
-    """Run the R→L transform; maps {alias: value} inputs to L-param {alias: value}."""
-    if calc.language == ParameterCalculationLanguage.VBSCRIPT:
-        raise NotImplementedError(f"VBScript calculation {calc.id!r}")
-    l_names = [pr.alias_name or pr.ref_id for pr in calc.lparameters.parameter_ref_ref]
-    if calc.rltransformation_func:
-        assert script is not None, (
-            f"calc {calc.id!r} has RLTransformationFunc but no Script block"
-        )
-        return eval_named_func(
-            script,
-            calc.rltransformation_func,
-            calc.rltransformation_parameters,
-            r_values,
-            l_names,
-        )
-    if calc.rltransformation:
-        return eval_inline(calc.rltransformation, r_values, l_names)
-    return {}
+def _run_inline(
+    code: str,
+    inputs: dict[str, Any],
+    output: dict[str, Any],
+    host: dict[str, Any],
+    jscript: Any,
+) -> dict[str, Any]:
+    names = {**output, **inputs}
+    decls = "".join(
+        f"var {name} = {json.dumps(value)};"
+        for name, value in names.items()
+        if _IDENT.match(name)
+    )
+    reader = ",".join(
+        f"{json.dumps(name)}: {name}" for name in output if _IDENT.match(name)
+    )
+    script = (
+        decls + "\n" + code + "\nfunction __xk_outputs() { return {" + reader + "}; }\n"
+    )
+    ctx = ScriptContext(script=script, get_message=True, host=host, jscript=jscript)
+    value = ctx.invoke("__xk_outputs", []).value
+    return _as_dict(value)
+
+
+__all__ = ["CalculationScope", "ChangeSet", "Journal", "run_calculations"]

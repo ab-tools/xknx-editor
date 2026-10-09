@@ -298,6 +298,10 @@ class ParameterState:
                 return result
         return None
 
+    def explicit_value(self, ref_id: str) -> str | None:
+        """The value explicitly set in this scope, ignoring parents and defaults."""
+        return self._known_param_ref_values.get(ref_id)
+
     def set_instance_ref(self, ref_id: str, value: str) -> None:
         found = self.find_scope_for_qualified(ref_id)
         if found is not None:
