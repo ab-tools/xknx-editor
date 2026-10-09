@@ -339,12 +339,16 @@ class ProjectService:
         parameters: list[tuple[str, str]] | None = None,
         com_objects: list[tuple[str, str | None]] | None = None,
         module_instances: list[tuple[str, str]] | None = None,
+        product_name: str = "",
+        hardware_name: str = "",
+        order_number: str = "",
+        manufacturer_name: str = "",
     ) -> int:
         """Add a device. ``product_ref_id`` names the catalog product; ``hardware2program_ref_id`` is
         the loaded program the application resolves through. Being ref-only, this package never
         reads the catalog, so the caller expands the application and supplies ``parameters``
-        (``(ref_id, value)``), ``com_objects`` (``(ref_id, channel_id)``), and ``module_instances``
-        (``(instance_id, ref_id)``)."""
+        (``(ref_id, value)``), ``com_objects`` (``(ref_id, channel_id)``), ``module_instances``
+        (``(instance_id, ref_id)``) and the product's display fields."""
         state = self._state(project_id)
         if address is not None:
             self._check_unique_address(state, segment_id, address)
@@ -357,6 +361,10 @@ class ProjectService:
             parameters=[[ref, value] for ref, value in (parameters or [])],
             com_objects=[[ref, channel] for ref, channel in (com_objects or [])],
             module_instances=[[iid, rid] for iid, rid in (module_instances or [])],
+            product_name=product_name,
+            hardware_name=hardware_name,
+            order_number=order_number,
+            manufacturer_name=manufacturer_name,
         )
         state.store.append(event)
         assert event.device_id is not None
