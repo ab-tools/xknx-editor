@@ -1,12 +1,14 @@
 """GUI project facade: lazy device view over ProjectService with selection and pub/sub."""
 
+import gc
 import hashlib
 import os
 import platform
 import shutil
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -324,6 +326,18 @@ class DeviceProduct:
             order_number=product.order_number or "",
             manufacturer_name=product.manufacturer_name or "",
         )
+
+
+@contextmanager
+def _gc_paused() -> Iterator[None]:
+    """Pause the cyclic garbage collector, restoring its previous state afterwards."""
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
 
 
 class ProjectService:
@@ -708,25 +722,26 @@ class ProjectService:
                     working=str(working),
                 )
                 self._copy_atomic(path, working)
-            new_pid = self._svc.open(working)
-            self._pid = new_pid
-            self._generation += 1
-            self._path = path
-            self._working_path = working
-            self._reset()
-            self._history_baseline = self._history_key()
-            if self.mirroring_active:
+            with _gc_paused():
+                new_pid = self._svc.open(working)
+                self._pid = new_pid
+                self._generation += 1
+                self._path = path
+                self._working_path = working
+                self._reset()
+                self._history_baseline = self._history_key()
+                if self.mirroring_active:
+                    self._log.info(
+                        "network location: working on a local copy",
+                        home=str(path),
+                        working=str(working),
+                    )
                 self._log.info(
-                    "network location: working on a local copy",
-                    home=str(path),
-                    working=str(working),
+                    "project opened",
+                    path=str(path),
+                    devices=len(self.devices),
+                    group_range_roots=len(self.get_group_range_tree()),
                 )
-            self._log.info(
-                "project opened",
-                path=str(path),
-                devices=len(self.devices),
-                group_range_roots=len(self.get_group_range_tree()),
-            )
 
     def import_knxproj(
         self, source: Path, dest: Path, *, password: str | None = None
@@ -1014,40 +1029,43 @@ class ProjectService:
                 report = self.build_progress
                 started = time.monotonic()
                 self._log.debug("building devices", total=total)
-                for i, row in enumerate(rows, start=1):
-                    device = self._build_device(row)
-                    if device is None:
-                        unloaded.append(
-                            UnloadedDevice(
-                                node_id=row.id,
-                                name=row.name or "",
-                                product_name=row.product_name or "",
-                                individual_address=self._svc.individual_address(
-                                    self._pid, row.id
+                # Building creates millions of long-lived objects; the cyclic garbage collector would
+                # rescan all of them over and over, which dominates the load time.
+                with _gc_paused():
+                    for i, row in enumerate(rows, start=1):
+                        device = self._build_device(row)
+                        if device is None:
+                            unloaded.append(
+                                UnloadedDevice(
+                                    node_id=row.id,
+                                    name=row.name or "",
+                                    product_name=row.product_name or "",
+                                    individual_address=self._svc.individual_address(
+                                        self._pid, row.id
+                                    )
+                                    or "",
+                                    program_ref=row.hardware2program_ref_id,
                                 )
-                                or "",
-                                program_ref=row.hardware2program_ref_id,
                             )
-                        )
-                    else:
-                        devices.append(device)
-                        # Verbose per-device trace: the build is otherwise a silent gap
-                        # between "opening project" and "project opened".
-                        self._log.debug(
-                            "built device",
-                            index=i,
-                            total=total,
-                            device_id=row.id,
-                            address=device.individual_address,
-                            name=device.name,
-                        )
-                    if report is not None:
-                        label = (
-                            f"{device.individual_address}  {device.name}".strip()
-                            if device is not None
-                            else (row.name or "")
-                        )
-                        report(i, total, label)
+                        else:
+                            devices.append(device)
+                            # Verbose per-device trace: the build is otherwise a silent gap
+                            # between "opening project" and "project opened".
+                            self._log.debug(
+                                "built device",
+                                index=i,
+                                total=total,
+                                device_id=row.id,
+                                address=device.individual_address,
+                                name=device.name,
+                            )
+                        if report is not None:
+                            label = (
+                                f"{device.individual_address}  {device.name}".strip()
+                                if device is not None
+                                else (row.name or "")
+                            )
+                            report(i, total, label)
                 self._log.info(
                     "devices built",
                     built=len(devices),
