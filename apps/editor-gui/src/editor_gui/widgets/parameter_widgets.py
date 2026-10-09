@@ -8,6 +8,7 @@ from imgui_bundle import imgui
 
 from editor_gui.device import Device
 from editor_gui.widgets.strings import S
+from xknxeditor.namespaces.intermediate.access_t import Access
 from xknxeditor.namespaces.intermediate.parameter_block_layout_t import (
     ParameterBlockLayout,
 )
@@ -525,10 +526,13 @@ def _render_block(
     differing_refs: frozenset[str] = frozenset(),
     buttons: ButtonActions | None = None,
 ) -> EnumPopupRequest | None:
+    if block.hidden:
+        return None
     block_prefix = f"{prefix}_{block.id}"
 
     if block.layout in (ParameterBlockLayout.GRID, ParameterBlockLayout.TABLE):
-        return _render_grid_block(
+        imgui.begin_disabled(block.read_only)
+        req = _render_grid_block(
             device,
             block,
             on_change,
@@ -537,9 +541,12 @@ def _render_block(
             differing_refs,
             buttons,
         )
+        imgui.end_disabled()
+        return req
 
     if block.inline:
-        return _render_children(
+        imgui.begin_disabled(block.read_only)
+        req = _render_children(
             device,
             block.children,
             on_change,
@@ -549,6 +556,8 @@ def _render_block(
             differing_refs,
             buttons,
         )
+        imgui.end_disabled()
+        return req
 
     label = _instance_label(block.text or block.name or block.id, block.id)
     param_count = count_parameters(block.children)
@@ -561,6 +570,7 @@ def _render_block(
     imgui.same_line()
     imgui.text_disabled(f"({param_count})")
     if is_open:
+        imgui.begin_disabled(block.read_only)
         req = _render_children(
             device,
             block.children,
@@ -571,6 +581,7 @@ def _render_block(
             differing_refs,
             buttons,
         )
+        imgui.end_disabled()
         if req is not None:
             popup_request = req
         imgui.tree_pop()
@@ -665,6 +676,8 @@ def _render_grid_block(
                     changed = param.value != param.default_value
                     if changed:
                         imgui.push_style_color(imgui.Col_.text, _CHANGED_COLOR)
+                    read_only = param.access == Access.READ
+                    imgui.begin_disabled(read_only)
                     req = _render_device_param(
                         device,
                         param,
@@ -673,9 +686,12 @@ def _render_grid_block(
                         deferred_enum=deferred_enum,
                         differs=param.ref_id in differing_refs,
                     )
+                    imgui.end_disabled()
                     if changed:
                         imgui.pop_style_color()
-                        if imgui.begin_popup_context_item(f"##reset_{widget_id}"):
+                        if not read_only and imgui.begin_popup_context_item(
+                            f"##reset_{widget_id}"
+                        ):
                             if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
                                 on_change(device, param.ref_id, param.default_value)
                             imgui.end_popup()
@@ -749,6 +765,8 @@ def _render_param_table(
             imgui.table_set_column_index(1)
             imgui.set_next_item_width(-1)
             widget_id = f"{device.node_id}_{param.ref_id}"
+            read_only = param.access == Access.READ
+            imgui.begin_disabled(read_only)
             req = _render_device_param(
                 device,
                 param,
@@ -757,8 +775,13 @@ def _render_param_table(
                 deferred_enum=deferred_enum,
                 differs=differs,
             )
+            imgui.end_disabled()
             # Right-click a changed value to restore the application default.
-            if changed and imgui.begin_popup_context_item(f"##reset_{widget_id}"):
+            if (
+                changed
+                and not read_only
+                and imgui.begin_popup_context_item(f"##reset_{widget_id}")
+            ):
                 if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
                     on_change(device, param.ref_id, param.default_value)
                 imgui.end_popup()
