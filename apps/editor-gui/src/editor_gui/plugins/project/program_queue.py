@@ -13,13 +13,41 @@ via ``submit`` before advancing — so all state lives on and is mutated from th
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from xknxeditor.prod.script import AbortToken
 
 if TYPE_CHECKING:
     from xknxeditor.download.scope import DownloadScope
+    from xknxeditor.prod.parser_v2.ui import UiButton
+
+
+@dataclass
+class ScriptRun:
+    """State of an online Button handler run ("Parameter Script" operation)."""
+
+    button: UiButton
+    progress: float | None = None
+    text: str = ""
+    cancel_requested_at: float | None = None
+    abort: AbortToken = field(default_factory=AbortToken)
+
+    @property
+    def canceled(self) -> bool:
+        return self.cancel_requested_at is not None
+
+    def cancel(self) -> None:
+        if self.cancel_requested_at is None:
+            self.cancel_requested_at = time.monotonic()
+
+    def ignored_cancel_for(self) -> float:
+        if self.cancel_requested_at is None:
+            return 0.0
+        return time.monotonic() - self.cancel_requested_at
 
 
 @dataclass
@@ -27,7 +55,8 @@ class QueueItem:
     node_id: int
     address: str
     name: str
-    scope: DownloadScope
+    scope: DownloadScope | None
+    script: ScriptRun | None = None
 
 
 class ProgramQueue:
@@ -58,14 +87,22 @@ class ProgramQueue:
 
     @property
     def visible(self) -> bool:
-        """The queue UI is shown only once something waits behind the running device."""
-        return len(self._queued) >= 1
+        """The queue UI is shown once something waits behind the running device, and while a
+        parameter script runs."""
+        current = self._current
+        return len(self._queued) >= 1 or (
+            current is not None and current.script is not None
+        )
 
     def enqueue(self, item: QueueItem) -> None:
         """Add a device to program. Dedupe per device: re-pressing a queued device only updates its
         scope (no duplicate); re-pressing the running device queues exactly one reprogram."""
         for queued in self._queued:
-            if queued.node_id == item.node_id:
+            if (
+                queued.node_id == item.node_id
+                and queued.script is None
+                and item.script is None
+            ):
                 queued.scope = item.scope
                 self.tick()
                 return
@@ -75,6 +112,11 @@ class ProgramQueue:
     def cancel(self, node_id: int) -> None:
         """Remove a *queued* device (the running one cannot be interrupted)."""
         self._queued = [q for q in self._queued if q.node_id != node_id]
+
+    def cancel_current(self) -> None:
+        """Ask a running parameter script to stop; it decides itself when to return."""
+        if self._current is not None and self._current.script is not None:
+            self._current.script.cancel()
 
     def clear_queued(self) -> None:
         self._queued.clear()

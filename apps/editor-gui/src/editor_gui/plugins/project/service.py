@@ -1801,6 +1801,33 @@ class ProjectService:
             return set[str]()
         return device.active_parameter_driven_com_object_ref_ids()
 
+    def persist_script_changes(
+        self, node_id: int, changes: "ChangeSet", label: str | None
+    ) -> None:
+        """Store values a running parameter script already applied to its locked device."""
+        values = [(ref, new) for ref, (_, new) in changes.items() if new is not None]
+        if self._pid is None or not values:
+            return
+        self._svc.set_parameters(self._pid, node_id, values, label=label)
+        self._bump(structural=False)
+
+    def finish_script_changes(self, node_id: int, old_active: set[str]) -> None:
+        """After a parameter script: reconcile com-objects and rebuild the device from the project."""
+        device = self.find_device_by_node_id(node_id)
+        if self._pid is None or device is None:
+            return
+        target = self._com_object_target(device, old_active)
+        if target is not None:
+            self._svc.set_parameters(
+                self._pid,
+                node_id,
+                [],
+                com_object_target=[(r, None) for r in sorted(target)],
+                app_program_id=device.app.program.id,
+            )
+        self._refresh_device(node_id)
+        self._bump(structural=False)
+
     def commit_param_changes(
         self,
         device: Device,

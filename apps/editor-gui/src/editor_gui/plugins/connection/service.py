@@ -375,6 +375,9 @@ class ConnectionService:
             return
         self._log.info("Master reset sent", address=address)
 
+    def security_for(self, device: Device) -> DeviceSecurity | None:
+        return self._security_for(device)
+
     def _security_for(self, device: Device) -> DeviceSecurity | None:
         """KNX Data Secure tool key for ``device`` from the loaded keyring, or ``None`` (program in
         the clear). A non-``None`` result secures every management APDU of the download."""

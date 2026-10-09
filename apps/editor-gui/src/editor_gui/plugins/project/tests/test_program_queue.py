@@ -5,7 +5,8 @@ from __future__ import annotations
 from concurrent.futures import Future
 from typing import Any
 
-from editor_gui.plugins.project.program_queue import ProgramQueue, QueueItem
+from editor_gui.plugins.project.program_queue import ProgramQueue, QueueItem, ScriptRun
+from xknxeditor.prod.parser_v2.ui import UiButton
 
 
 class _Harness:
@@ -124,3 +125,36 @@ def test_tick_does_not_double_start_when_busy() -> None:
     h.queue.tick()  # extra frame ticks must not start a second op
     h.queue.tick()
     assert h.started == [1]
+
+
+def _script_item(node_id: int) -> QueueItem:
+    button = UiButton(id="B-1", text="Run", handler="h", online="ConnectionOriented")
+    return QueueItem(
+        node_id=node_id,
+        address=f"1.1.{node_id}",
+        name=f"D{node_id}",
+        scope=None,
+        script=ScriptRun(button),
+    )
+
+
+def test_script_runs_show_the_panel_and_are_not_deduped() -> None:
+    h = _Harness()
+    h.queue.enqueue(_script_item(1))
+    assert h.queue.visible is True
+    h.queue.enqueue(_script_item(1))
+    h.queue.enqueue(_script_item(1))
+    assert len(h.queue.queued) == 2
+
+
+def test_cancel_current_only_flags_a_script() -> None:
+    h = _Harness()
+    h.queue.enqueue(_script_item(1))
+    current = h.queue.current
+    assert current is not None and current.script is not None
+    assert not current.script.canceled
+    h.queue.cancel_current()
+    assert current.script.canceled
+    assert h.queue.current is current
+    h.finish(1)
+    assert h.queue.current is None

@@ -1706,5 +1706,17 @@ class ProjectStrings:
     def SCRIPT_ABORTED(self) -> str:
         return _("The script was stopped.")
 
+    @property
+    def SCRIPT_CANCEL(self) -> str:
+        return _("Cancel")
+
+    @property
+    def SCRIPT_CANCELING(self) -> str:
+        return _("Canceling…")
+
+    @property
+    def SCRIPT_NOT_CONNECTED(self) -> str:
+        return _("No connection to the bus.")
+
 
 S = ProjectStrings()

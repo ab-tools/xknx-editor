@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 from editor_gui.plugins.base import Logger, PanelDefinition, PluginAPI
 from editor_gui.plugins.project.button_runner import ButtonRunner
-from editor_gui.plugins.project.program_queue import ProgramQueue, QueueItem
+from editor_gui.plugins.project.online_runner import OnlineButtonRunner
+from editor_gui.plugins.project.program_queue import (
+    ProgramQueue,
+    QueueItem,
+    ScriptRun,
+)
 from editor_gui.plugins.project.service import DeviceConfigClipboard
 from editor_gui.plugins.project.strings import S
 from editor_gui.plugins.project.ui import (
@@ -36,6 +41,10 @@ if TYPE_CHECKING:
     from xknxeditor.download.image import GroupCommunication
     from xknxeditor.download.scope import DownloadScope
     from xknxeditor.prod.parser_v2.ui import UiButton
+
+
+def _run_now(fn: Callable[[], None]) -> None:
+    fn()
 
 
 # Which commissioning "loaded" flags a successful download of each scope sets (keyed by
@@ -87,6 +96,14 @@ class ProjectPlugin:
             get_progress=lambda: api.connection.busy_progress,
             on_cancel=self._program_queue.cancel,
             on_clear=self._program_queue.clear_queued,
+            on_cancel_current=self._program_queue.cancel_current,
+        )
+        self._online_runner = OnlineButtonRunner(
+            api.project,
+            api.connection,
+            api.main_thread.submit if api.main_thread is not None else _run_now,
+            Logger(api.log, "project"),
+            api.notify,
         )
 
         self._memory_preview = MemoryPreviewWindow(
@@ -1044,6 +1061,16 @@ class ProjectPlugin:
         )
         if button.online is None:
             self._button_runner.start(device, button)
+            return
+        self._program_queue.enqueue(
+            QueueItem(
+                node_id=device.node_id,
+                address=device.individual_address or "",
+                name=device.name,
+                scope=None,
+                script=ScriptRun(button),
+            )
+        )
 
     def _button_state(
         self, device: "Device", button: "UiButton"
@@ -1129,6 +1156,10 @@ class ProjectPlugin:
         """Start one queued programming via the normal single-device path (slot, progress, notice,
         commissioning all handled by ``program_device`` + the commissioning callback). Returns the
         Future, or None if it could not start (not connected / device gone)."""
+        if item.script is not None:
+            return self._online_runner.start(item)
+        if item.scope is None:
+            return None
         device = self._api.project.find_device_by_node_id(item.node_id)
         if device is None:
             self._api.log.debug(
