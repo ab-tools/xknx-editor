@@ -893,13 +893,15 @@ def _render_grid_cells(
     outer_width = max(
         avail,
         sum(w for w in widths if w is not None)
-        + stretch_cols * px(_MIN_STRETCH_COLUMN)
-        + 2 * imgui.get_style().cell_padding.x * total_cols,
+        + stretch_cols * px(_MIN_STRETCH_COLUMN),
     )
 
+    # Grid columns are exactly their declared width (no padding between them), so the columns
+    # of grids above each other line up; fields leave a small gap to the next column instead.
     padding = imgui.get_style().cell_padding
     imgui.push_style_var(
-        imgui.StyleVar_.cell_padding, imgui.ImVec2(padding.x, padding.y / 4)
+        imgui.StyleVar_.cell_padding,
+        imgui.ImVec2(padding.x if is_table else 0, padding.y / 4),
     )
     opened = imgui.begin_table(
         f"##grid_{prefix}", total_cols, table_flags, imgui.ImVec2(outer_width, 0)
@@ -960,8 +962,10 @@ def _render_grid_cells(
 def _render_cell_separator(sep: UiSeparator) -> None:
     """A separator in a grid cell: a headline as plain text, a label dimmed, a ruler across."""
     if sep.hint == "Headline" and sep.text:
+        imgui.align_text_to_frame_padding()
         imgui.text(sep.text)
     elif sep.hint is None and sep.text:
+        imgui.align_text_to_frame_padding()
         imgui.text_disabled(sep.text)
     else:
         _render_separator(sep)
@@ -975,6 +979,7 @@ def _render_grid_param(
     differing_refs: frozenset[str],
 ) -> EnumPopupRequest | None:
     if _shows_as_text(param):
+        imgui.align_text_to_frame_padding()
         imgui.text(_value_display(param, param.value))
         if param.suffix:
             imgui.same_line()
@@ -986,7 +991,7 @@ def _render_grid_param(
         if param.suffix
         else 0.0
     )
-    imgui.set_next_item_width(-1 - suffix_width)
+    imgui.set_next_item_width(-px(_CELL_GAP) - suffix_width)
     widget_id = f"{device.node_id}_{param.ref_id}"
     # GRID/TABLE cells carry no label to tint, so mark a changed value by tinting
     # the widget's own text (combo preview / input), matching the table view.
@@ -1107,6 +1112,8 @@ _INFO_COLOR = imgui.ImVec4(0.45, 0.72, 1.0, 1.0)
 _MIN_STRETCH_COLUMN = 80.0
 # Page width at 100 % scaling that percentage column widths of a grid refer to.
 _GRID_REFERENCE_WIDTH = 540.0
+# Gap at 100 % scaling a field in a grid cell leaves to the next column.
+_CELL_GAP = 6.0
 # Characters a number field has room for at least.
 _MIN_NUMBER_CHARS = 3
 _SEPARATOR_ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
