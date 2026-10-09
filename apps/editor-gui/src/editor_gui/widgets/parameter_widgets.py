@@ -9,8 +9,14 @@ from imgui_bundle import imgui
 from editor_gui.device import Device
 from editor_gui.regional import regional_format
 from editor_gui.widgets.dpi import px
-from editor_gui.widgets.float_format import format_float, parse_float, step_float
+from editor_gui.widgets.float_format import format_float, general_float, parse_float
 from editor_gui.widgets.strings import S
+from editor_gui.widgets.time_format import (
+    format_time,
+    parse_time,
+    time_pattern,
+    unit_ms,
+)
 from editor_gui.widgets.value_pickers import (
     format_date,
     render_color_param,
@@ -39,14 +45,13 @@ from xknxeditor.prod.parser_v2.ui.parameter import (
     NumberSliderWidget,
     NumberWidget,
     PictureWidget,
-    TextWidget,
+    ProgressBarWidget,
+    RawDataWidget,
+    TimeWidget,
 )
 
 # Parameters changed from their default are tinted to stand out.
 _CHANGED_COLOR = imgui.ImVec4(0.36, 0.71, 1.0, 1.0)
-# Text parameters longer than this many octets get a multi-line editor.
-_MULTILINE_TEXT_LENGTH = 255
-_MULTILINE_TEXT_ROWS = 6
 _ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
 
 
@@ -128,17 +133,19 @@ def _default_display(param: UiParameter) -> str:
 
 
 def _value_display(param: UiParameter, value: str) -> str:
-    """``value`` as shown for ``param``: an enum value as its label, a float in its format."""
-    if isinstance(param.widget, EnumWidget):
-        for choice in param.widget.choices:
+    """``value`` as shown for ``param``: an enum value as its label, a float, date or time in
+    its format."""
+    widget = param.widget
+    if isinstance(widget, EnumWidget):
+        for choice in widget.choices:
             if str(choice.value) == value:
                 return choice.label
-    if isinstance(param.widget, FloatWidget | FloatSliderWidget) and value:
-        return _float_display(param.widget, value)
-    if isinstance(param.widget, DateWidget):
-        return format_date(
-            value, param.widget.display_the_year, regional_format().short_date
-        )
+    if isinstance(widget, FloatWidget | FloatSliderWidget) and value:
+        return format_float(value, decimal=regional_format().decimal)
+    if isinstance(widget, DateWidget):
+        return format_date(value, widget.display_the_year, regional_format())
+    if isinstance(widget, TimeWidget):
+        return format_time(value, widget.unit.value, _hint(widget))
     return value
 
 
@@ -183,7 +190,7 @@ def render_param_widget(
                         if imgui.selectable(choice.label, selected)[0]:
                             on_change(str(choice.value))
                     imgui.end_combo()
-        case NumberWidget() | NumberSliderWidget() as w:
+        case NumberWidget() as w:
             _render_int_param(
                 widget_id,
                 "" if differs else param.value,
@@ -193,18 +200,39 @@ def render_param_widget(
                 differs,
                 w.increment,
             )
-        case FloatWidget() | FloatSliderWidget() as w:
+        case ProgressBarWidget() as w:
+            _render_int_param(
+                widget_id,
+                "" if differs else param.value,
+                w.min,
+                w.max,
+                on_change,
+                differs,
+            )
+        case NumberSliderWidget() as w:
+            _render_slider(
+                widget_id, param.value, w.min, w.max, w.increment, on_change, differs
+            )
+        case FloatSliderWidget() as w:
+            _render_slider(
+                widget_id,
+                param.value,
+                w.min,
+                w.max,
+                w.increment,
+                on_change,
+                differs,
+                is_float=True,
+            )
+        case FloatWidget() as w:
             _render_float_param(widget_id, w, param.value, on_change, differs)
+        case TimeWidget() as w:
+            _render_time_param(widget_id, w, param.value, on_change, differs)
         case ColorWidget():
             render_color_param(widget_id, param.value, on_change, differs)
         case DateWidget() as w:
             render_date_param(
-                widget_id,
-                param.value,
-                w.display_the_year,
-                on_change,
-                differs,
-                regional_format().short_date,
+                widget_id, param.value, w.display_the_year, on_change, differs
             )
         case CheckBoxWidget():
             if differs:
@@ -214,14 +242,8 @@ def render_param_widget(
                 changed, new_checked = _small_checkbox(f"##{widget_id}", checked)
                 if changed:
                     on_change("1" if new_checked else "0")
-        case TextWidget() as w:
-            _render_text_param(
-                widget_id,
-                param.value,
-                on_change,
-                differs,
-                multiline=(w.max_length or 0) > _MULTILINE_TEXT_LENGTH,
-            )
+        case RawDataWidget():
+            pass
         case PictureWidget():
             imgui.text_disabled(S.NODE_IMAGE_PLACEHOLDER)
         case _:
@@ -245,92 +267,157 @@ def _render_text_param(
     value: str,
     on_change: Callable[[str], None],
     differs: bool,
-    *,
-    multiline: bool = False,
 ) -> None:
     if differs:
         _, new_value = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
-    elif multiline:
-        _, new_value = imgui.input_text_multiline(
-            f"##{widget_id}",
-            value,
-            imgui.ImVec2(-1, imgui.get_text_line_height() * _MULTILINE_TEXT_ROWS),
-        )
     else:
         _, new_value = imgui.input_text(f"##{widget_id}", value)
     if imgui.is_item_deactivated_after_edit() and (not differs or new_value):
         on_change(new_value)
 
 
-def _float_display(widget: FloatWidget | FloatSliderWidget, value: str) -> str:
-    regional = regional_format()
-    return format_float(
-        value,
-        widget.display_format,
-        widget.display_factor,
-        widget.display_offset,
-        decimal=regional.decimal,
-        group=regional.group,
-    )
-
-
 def _render_float_param(
     widget_id: str,
-    widget: FloatWidget | FloatSliderWidget,
+    widget: FloatWidget,
     value: str,
     on_change: Callable[[str], None],
     differs: bool,
 ) -> None:
-    """A float shown in its display format; an entry is stored when editing ends."""
-    shown = "" if differs else _float_display(widget, value)
+    """A float with the regional decimal separator; an entry is stored when editing ends."""
+    regional = regional_format()
+    shown = "" if differs else format_float(value, decimal=regional.decimal)
     chars = max(
-        len(_float_display(widget, repr(widget.min))),
-        len(_float_display(widget, repr(widget.max))),
-        len(shown),
+        len(general_float(widget.min)), len(general_float(widget.max)), len(shown)
     )
-    _set_spin_field_width(chars)
+    _set_number_field_width(chars, spin=False)
     if differs:
         _, text = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
     else:
         _, text = imgui.input_text(f"##{widget_id}", shown)
-    edited = imgui.is_item_deactivated_after_edit()
-    steps = _spin_buttons(widget_id, enabled=not differs)
-    if steps:
-        stepped = step_float(value, steps, widget.increment, widget.min, widget.max)
-        if stepped is not None and stepped != value:
-            on_change(stepped)
+    if not imgui.is_item_deactivated_after_edit() or text == shown:
         return
-    if not edited or text == shown:
-        return
-    regional = regional_format()
     stored = parse_float(
-        text,
-        widget.min,
-        widget.max,
-        widget.display_factor,
-        widget.display_offset,
-        decimal=regional.decimal,
-        group=regional.group,
+        text, widget.min, widget.max, decimal=regional.decimal, group=regional.group
     )
     if stored is not None:
         on_change(stored)
+
+
+# Value of a slider while it is dragged, stored when it is released.
+_slider_values: dict[str, float] = {}
+
+
+def _render_slider(
+    widget_id: str,
+    value: str,
+    minimum: float,
+    maximum: float,
+    increment: float | None,
+    on_change: Callable[[str], None],
+    differs: bool,
+    *,
+    is_float: bool = False,
+) -> None:
+    """A slider in steps of ``increment`` that shows its value; stored when released."""
+    try:
+        current = float(value)
+    except ValueError:
+        current = minimum
+    current = _slider_values.get(widget_id, current)
+    if differs and widget_id not in _slider_values:
+        shown = S.PARAM_DIFFERS
+    elif is_float:
+        shown = general_float(current).replace(".", regional_format().decimal)
+    else:
+        shown = str(round(current))
+    changed, moved = imgui.slider_float(
+        f"##{widget_id}", current, minimum, maximum, shown.replace("%", "%%")
+    )
+    if changed:
+        step = increment or (0 if is_float else 1)
+        if step:
+            moved = minimum + round((moved - minimum) / step) * step
+        _slider_values[widget_id] = min(maximum, max(minimum, moved))
+    if imgui.is_item_deactivated():
+        released = _slider_values.pop(widget_id, None)
+        if released is not None:
+            stored = general_float(released) if is_float else str(round(released))
+            if differs or stored != value:
+                on_change(stored)
+
+
+def _render_time_param(
+    widget_id: str,
+    widget: TimeWidget,
+    value: str,
+    on_change: Callable[[str], None],
+    differs: bool,
+) -> None:
+    """A time in the format of its hint with the format next to it, else a number of its unit
+    with the unit next to it."""
+    hint = _hint(widget)
+    pattern = time_pattern(hint) if unit_ms(widget.unit.value) is not None else None
+    if pattern is None:
+        _render_int_param(
+            widget_id,
+            "" if differs else value,
+            widget.min,
+            widget.max,
+            on_change,
+            differs,
+        )
+        _render_suffix(S.time_unit(widget.unit.value))
+        return
+    shown = "" if differs else format_time(value, widget.unit.value, hint)
+    _set_number_field_width(max(len(pattern), len(shown)), spin=False)
+    if differs:
+        _, text = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
+    else:
+        _, text = imgui.input_text(f"##{widget_id}", shown)
+    edited = imgui.is_item_deactivated_after_edit() and text != shown
+    _render_suffix(pattern)
+    if edited:
+        stored = parse_time(text, widget.unit.value, hint, widget.min, widget.max)
+        if stored is not None:
+            on_change(stored)
+
+
+def _suffix_width(suffix: str | None) -> float:
+    """Room a suffix shown after a field takes."""
+    if not suffix:
+        return 0.0
+    return imgui.calc_text_size(suffix).x + imgui.get_style().item_spacing.x
+
+
+def _render_suffix(suffix: str | None) -> None:
+    """``suffix`` (e.g. a unit) after the previous field, on the field's text line."""
+    if suffix:
+        imgui.same_line()
+        imgui.align_text_to_frame_padding()
+        imgui.text(suffix)
+
+
+def _hint(widget: TimeWidget) -> str | None:
+    return widget.hint.value if widget.hint is not None else None
 
 
 def _spin_width() -> float:
     return imgui.get_frame_height() * 0.6
 
 
-def _set_spin_field_width(chars: int) -> None:
-    """Size the next number field to ``chars`` characters plus its spin arrows, at most the
-    requested width; the arrows are drawn inside its right end."""
+def _set_number_field_width(chars: int, *, spin: bool = True) -> None:
+    """Size the next field to ``chars`` characters (plus its spin arrows, drawn inside its right
+    end), at most the requested width."""
     style = imgui.get_style()
     content = (
         imgui.calc_text_size("0" * max(chars, _MIN_NUMBER_CHARS)).x
         + 2 * style.frame_padding.x
-        + _spin_width()
     )
+    if spin:
+        content += _spin_width()
     imgui.set_next_item_width(min(imgui.calc_item_width(), content))
-    imgui.set_next_item_allow_overlap()
+    if spin:
+        imgui.set_next_item_allow_overlap()
 
 
 def _spin_buttons(widget_id: str, *, enabled: bool) -> int:
@@ -401,7 +488,7 @@ def _render_int_param(
     increment: int = 1,
 ) -> None:
     chars = max(len(str(min_value or 0)), len(str(max_value or 0)), len(value))
-    _set_spin_field_width(chars)
+    _set_number_field_width(chars)
     if differs:
         _, new_text = imgui.input_text_with_hint(
             f"##{widget_id}", S.PARAM_DIFFERS, "", imgui.InputTextFlags_.chars_decimal
@@ -1002,17 +1089,10 @@ def _render_grid_param(
     if _shows_as_text(param):
         imgui.align_text_to_frame_padding()
         imgui.text(_value_display(param, param.value))
-        if param.suffix:
-            imgui.same_line()
-            imgui.text(param.suffix)
+        _render_suffix(param.suffix)
         _track_help(param.help_context)
         return None
-    suffix_width = (
-        imgui.calc_text_size(param.suffix).x + imgui.get_style().item_spacing.x
-        if param.suffix
-        else 0.0
-    )
-    imgui.set_next_item_width(-px(_CELL_GAP) - suffix_width)
+    imgui.set_next_item_width(-px(_CELL_GAP) - _suffix_width(param.suffix))
     widget_id = f"{device.node_id}_{param.ref_id}"
     # GRID/TABLE cells carry no label to tint, so mark a changed value by tinting
     # the widget's own text (combo preview / input), matching the table view.
@@ -1031,9 +1111,7 @@ def _render_grid_param(
     )
     imgui.end_disabled()
     _track_help(param.help_context)
-    if param.suffix:
-        imgui.same_line()
-        imgui.text(param.suffix)
+    _render_suffix(param.suffix)
     if changed:
         imgui.pop_style_color()
         if not read_only and imgui.begin_popup_context_item(f"##reset_{widget_id}"):
@@ -1075,7 +1153,7 @@ def _render_param_table(
             indent = param.indent_level * px(12.0)
             if indent > 0:
                 imgui.indent(indent)
-            label = param.label + (f"  {param.suffix}" if param.suffix else "")
+            label = param.label
             differs = param.ref_id in differing_refs
             # In multi-edit a diverging value has no single "changed vs default" state to show.
             changed = not differs and param.value != param.default_value
@@ -1089,6 +1167,8 @@ def _render_param_table(
                     imgui.set_tooltip(
                         S.PARAM_CHANGED_TOOLTIP.format(default=_default_display(param))
                     )
+            elif isinstance(param.widget, RawDataWidget):
+                imgui.text_disabled(label)
             else:
                 imgui.text(label)
             _track_help(param.help_context)
@@ -1097,9 +1177,10 @@ def _render_param_table(
             imgui.table_set_column_index(1)
             if _shows_as_text(param):
                 imgui.text(_value_display(param, param.value))
+                _render_suffix(param.suffix)
                 _track_help(param.help_context)
                 continue
-            imgui.set_next_item_width(-1)
+            imgui.set_next_item_width(-1 - _suffix_width(param.suffix))
             widget_id = f"{device.node_id}_{param.ref_id}"
             read_only = param.access == Access.READ
             imgui.begin_disabled(read_only)
@@ -1122,6 +1203,7 @@ def _render_param_table(
                 if imgui.menu_item(S.PARAM_RESET_DEFAULT, "", False)[0]:
                     on_change(device, param.ref_id, param.default_value)
                 imgui.end_popup()
+            _render_suffix(param.suffix)
             if req is not None:
                 popup_request = EnumPopupRequest(device=device, param=req.param)
         imgui.end_table()

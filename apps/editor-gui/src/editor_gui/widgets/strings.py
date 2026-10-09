@@ -160,5 +160,17 @@ class WidgetStrings(BaseStrings):
         """Abbreviated weekday names, Monday first, separated by spaces."""
         return _("Mo Tu We Th Fr Sa Su")
 
+    def time_unit(self, unit: str) -> str:
+        """Name of a time parameter's unit shown next to its value."""
+        names = {
+            "Hours": _("Hours"),
+            "Minutes": _("Minutes"),
+            "Seconds": _("Seconds"),
+            "HundredMilliseconds": _("x 100 ms"),
+            "TenMilliseconds": _("x 10 ms"),
+            "Milliseconds": _("Milliseconds"),
+        }
+        return names.get(unit, unit)
+
 
 S = WidgetStrings()

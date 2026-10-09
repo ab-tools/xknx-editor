@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import pytest
 
+from editor_gui.regional import RegionalFormat
 from editor_gui.widgets.value_pickers import (
     format_date,
     parse_color,
     parse_date,
     shade,
 )
+
+_DE_MONTHS = (
+    "Januar", "Februar", "März", "April", "Mai", "Juni",
+    "Juli", "August", "September", "Oktober", "November", "Dezember",
+)  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -30,37 +36,48 @@ def test_shade_lightens_and_darkens() -> None:
     assert shade(0x4F81BD, 0.0) == 0x4F81BD
 
 
+_ISO = RegionalFormat(short_date="yyyy-MM-dd", day_month="d. MMMM", months=_DE_MONTHS)
+_GERMAN = RegionalFormat(
+    short_date="dd.MM.yyyy", day_month="d. MMMM", months=_DE_MONTHS
+)
+_US = RegionalFormat(short_date="M/d/yyyy", day_month="MMMM d")
+
+
 @pytest.mark.parametrize(
-    ("text", "year_shown", "pattern", "date"),
+    ("regional", "year_shown", "shown"),
     [
-        ("2026-10-09", True, "yyyy-MM-dd", "2026-10-09"),
-        ("2026-2-3", True, "yyyy-MM-dd", "2026-02-03"),
-        ("9.10.2026", True, "dd.MM.yyyy", "2026-10-09"),
-        ("2026-10-09", True, "dd.MM.yyyy", "2026-10-09"),
-        ("10/9/2026", True, "M/d/yyyy", "2026-10-09"),
-        ("30.02.2026", True, "dd.MM.yyyy", None),
-        ("9.10", True, "dd.MM.yyyy", None),
-        ("9.10", False, "dd.MM.yyyy", "2020-10-09"),
-        ("10-09", False, "yyyy-MM-dd", "2020-10-09"),
-        ("nonsense", True, "dd.MM.yyyy", None),
+        (_ISO, True, "2026-12-24"),
+        (_ISO, False, "24. Dezember"),
+        (_GERMAN, True, "24.12.2026"),
+        (_US, True, "12/24/2026"),
+        (_US, False, "December 24"),
+        (RegionalFormat(short_date="dd.MM.yy"), True, "24.12.26"),
+        (RegionalFormat(short_date="d 'de' MMMM yyyy"), True, "24 de December 2026"),
+    ],
+)
+def test_format_date(regional: RegionalFormat, year_shown: bool, shown: str) -> None:
+    assert format_date("2026-12-24", year_shown, regional) == shown
+
+
+@pytest.mark.parametrize(
+    ("text", "regional", "year_shown", "date"),
+    [
+        ("2026-10-09", _ISO, True, "2026-10-09"),
+        ("2026-2-3", _ISO, True, "2026-02-03"),
+        ("9.10.2026", _GERMAN, True, "2026-10-09"),
+        ("2026-10-09", _GERMAN, True, "2026-10-09"),
+        ("10/9/2026", _US, True, "2026-10-09"),
+        ("30.02.2026", _GERMAN, True, None),
+        ("9.10.2026", _ISO, True, None),
+        ("24. Dezember", _ISO, False, "2020-12-24"),
+        ("24.dezember", _ISO, False, "2020-12-24"),
+        ("24.12", _GERMAN, False, "2020-12-24"),
+        ("12-24", _ISO, False, "2020-12-24"),
+        ("December 24", _US, False, "2020-12-24"),
+        ("nonsense", _GERMAN, True, None),
     ],
 )
 def test_parse_date(
-    text: str, year_shown: bool, pattern: str, date: str | None
+    text: str, regional: RegionalFormat, year_shown: bool, date: str | None
 ) -> None:
-    assert parse_date(text, year_shown, "2020-01-01", pattern) == date
-
-
-@pytest.mark.parametrize(
-    ("year_shown", "pattern", "shown"),
-    [
-        (True, "yyyy-MM-dd", "2026-01-09"),
-        (False, "yyyy-MM-dd", "01-09"),
-        (True, "dd.MM.yyyy", "09.01.2026"),
-        (False, "dd.MM.yyyy", "09.01"),
-        (True, "M/d/yyyy", "1/9/2026"),
-        (False, "d-M-yyyy", "9-1"),
-    ],
-)
-def test_format_date(year_shown: bool, pattern: str, shown: str) -> None:
-    assert format_date("2026-01-09", year_shown, pattern) == shown
+    assert parse_date(text, year_shown, "2020-01-01", regional) == date
