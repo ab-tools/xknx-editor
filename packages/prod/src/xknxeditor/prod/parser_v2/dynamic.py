@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from xknxeditor.namespaces.intermediate import (
     ApplicationProgram,
@@ -33,8 +34,9 @@ from xknxeditor.namespaces.intermediate.module_def_static_t_parameters_union_pro
 from xknxeditor.namespaces.intermediate.property_union_t import PropertyUnion
 
 from ..errors import EncodingError
+from ..script.values import check_value
 from .application_indexer import ApplicationIndexer
-from .calculation import evaluate_lr, evaluate_rl
+from .calculation import CalculationScope, ChangeSet, Journal, run_calculations
 from .context import EvalCapture, EvalContext
 from .encode import (
     MemWrite,
@@ -71,8 +73,16 @@ from .nodes import (
     RenameNode,
     RepeatNode,
 )
-from .state import GlobalState, compute_arg_defaults, compute_param_ref_defaults
+from .state import (
+    GlobalState,
+    ParameterState,
+    compute_arg_defaults,
+    compute_param_ref_defaults,
+)
 from .ui import UiNode
+
+if TYPE_CHECKING:
+    from ..script.compat.runtime import JScriptEnv
 
 __all__ = [
     "AssignNode",
@@ -472,7 +482,7 @@ def _prune_inactive(
 
 
 class DynamicUI:
-    __slots__ = ("_app", "_idx", "_state", "_tree", "_ui")
+    __slots__ = ("_app", "_idx", "_state", "_tree", "_ui", "script_env")
 
     def __init__(
         self,
@@ -495,6 +505,7 @@ class DynamicUI:
             com_object_instance_refs=com_object_instance_refs,
         )
         self._ui: list[UiNode] | None = None
+        self.script_env: JScriptEnv | None = None
 
     def _discover_union_activity(self) -> None:
         """Discovery pass ahead of a render eval: evaluate the tree WITHOUT union suppression so every
@@ -740,8 +751,25 @@ class DynamicUI:
         )
 
     def get_parameter_ref(self, ref_id: str) -> str | None:
-        """Current value of a parameter ref in this UI state (None if unset)."""
-        return self._state.get(ref_id)
+        """Current value of a parameter ref in this UI state."""
+        return self.get_value(ref_id)
+
+    def _locate(self, ref_id: str) -> tuple[ParameterState, str]:
+        found = self._state.find_scope_for_qualified(ref_id)
+        if (
+            found is None
+            and ref_id not in self._idx.parameter_refs
+            and self._ui is None
+        ):
+            self.ui()
+            found = self._state.find_scope_for_qualified(ref_id)
+        return found if found is not None else (self._state, ref_id)
+
+    def get_value(self, ref_id: str) -> str | None:
+        """Value of a (possibly module-qualified) parameter ref, falling back to its default."""
+        scope, local = self._locate(ref_id)
+        value = scope.get(local)
+        return value if value is not None else self._idx.default_value(local)
 
     def validate_parameter_values(self) -> None:
         """Check resolved values, including selectors without storage."""
@@ -756,50 +784,126 @@ class DynamicUI:
             except ValueError as exc:
                 raise EncodingError(f"parameter {ref_id}: {exc}") from exc
 
-    def set_parameter_ref(self, ref_id: str, value: str) -> None:
-        found = self._state.find_scope_for_qualified(ref_id)
-        local_id = found[1] if found is not None else ref_id
-        ref = self._idx.parameter_refs.get(local_id)
-        if ref is None:
+    def _text_encoding(self) -> str:
+        options = self._app.static.options
+        encoding = options.text_parameter_encoding if options is not None else None
+        return encoding.value if encoding is not None else "iso-8859-1"
+
+    def _journal(self) -> Journal:
+        def explicit(ref_id: str) -> str | None:
+            scope, local = self._locate(ref_id)
+            return scope.explicit_value(local)
+
+        def write(ref_id: str, value: str | None) -> None:
+            if value is None:
+                self._state.clear_instance_ref(ref_id)
+            else:
+                self._state.set_instance_ref(ref_id, value)
+
+        return Journal(self.get_value, explicit, write)
+
+    def _validate(
+        self, scope: ParameterState, local: str, ref_id: str, value: str
+    ) -> None:
+        pass
+
+    def _change(
+        self,
+        ref_id: str,
+        value: str,
+        *,
+        strict: bool,
+        validate: bool,
+        raise_calc_errors: bool,
+        require_active: bool,
+    ) -> ChangeSet:
+        scope, local = self._locate(ref_id)
+        tc = self._idx.type_of(local)
+        if local not in self._idx.parameter_refs or tc is None:
             raise ValueError(f"unknown parameter ref {ref_id!r}")
-        parameter = self._idx.parameters[ref.ref_id]
-        parameter_type = self._idx.parameter_types[parameter.parameter_type]
-        value = validate_parameter_value(value, parameter_type.choice)
-        active = self._state.active_param_refs()
-        if active and ref_id not in active:
-            raise ValueError(
-                f"parameter ref {ref_id!r} is not active in the current UI state"
+        if strict:
+            value = check_value(value, tc, text_encoding=self._text_encoding())
+        else:
+            value = validate_parameter_value(value, tc)
+        if require_active:
+            active = self._state.active_param_refs()
+            if active and ref_id not in active:
+                raise ValueError(
+                    f"parameter ref {ref_id!r} is not active in the current UI state"
+                )
+        journal = self._journal()
+
+        def scoped_get(local_ref: str) -> str | None:
+            v = scope.get(local_ref)
+            return v if v is not None else self._idx.default_value(local_ref)
+
+        try:
+            if validate:
+                self._validate(scope, local, ref_id, value)
+            journal.set(ref_id, value)
+            run_calculations(
+                self._idx,
+                local,
+                CalculationScope(get=scoped_get, qualify=scope.qualify_local),
+                journal,
+                self.script_env,
+                raise_errors=raise_calc_errors,
             )
-        self._state.set_instance_ref(ref_id, value)
+        except BaseException:
+            journal.rollback()
+            self._ui = None
+            raise
         self._ui = None
-        script = self._idx.script
-        for calc in self._idx.calculations_for_l(ref_id):
-            l_values = {
-                pr.alias_name or pr.ref_id: self._state.get(pr.ref_id) or ""
-                for pr in calc.lparameters.parameter_ref_ref
-            }
-            try:
-                r_values = evaluate_lr(calc, l_values, script)
-            except NotImplementedError:
-                continue
-            for pr in calc.rparameters.parameter_ref_ref:
-                v = r_values.get(pr.alias_name or pr.ref_id)
-                if v is not None:
-                    self._state.set_instance_ref(pr.ref_id, v)
-                else:
-                    self._state.clear_instance_ref(pr.ref_id)
-        for calc in self._idx.calculations_for_r(ref_id):
-            r_values = {
-                pr.alias_name or pr.ref_id: self._state.get(pr.ref_id) or ""
-                for pr in calc.rparameters.parameter_ref_ref
-            }
-            try:
-                l_values = evaluate_rl(calc, r_values, script)
-            except NotImplementedError:
-                continue
-            for pr in calc.lparameters.parameter_ref_ref:
-                v = l_values.get(pr.alias_name or pr.ref_id)
-                if v is not None:
-                    self._state.set_instance_ref(pr.ref_id, v)
-                else:
-                    self._state.clear_instance_ref(pr.ref_id)
+        return journal.changes()
+
+    def set_parameter_ref(self, ref_id: str, value: str) -> ChangeSet:
+        """Set an active parameter and run its calculations; calculation errors are logged."""
+        return self._change(
+            ref_id,
+            value,
+            strict=False,
+            validate=False,
+            raise_calc_errors=False,
+            require_active=True,
+        )
+
+    def edit_parameter(
+        self, ref_id: str, value: str, *, validate: bool = True
+    ) -> ChangeSet:
+        """A user edit: strict type check, validations and calculations, atomic on error."""
+        return self._change(
+            ref_id,
+            value,
+            strict=True,
+            validate=validate,
+            raise_calc_errors=True,
+            require_active=True,
+        )
+
+    def write_parameter(self, ref_id: str, value: str) -> ChangeSet:
+        """A script write: like an edit, but inactive parameters may be written."""
+        return self._change(
+            ref_id,
+            value,
+            strict=True,
+            validate=True,
+            raise_calc_errors=True,
+            require_active=False,
+        )
+
+    def apply_parameter_values(self, values: Mapping[str, str | None]) -> None:
+        """Set (or clear, for ``None``) values without checks or calculations."""
+        for ref_id, value in values.items():
+            if value is None:
+                self._state.clear_instance_ref(ref_id)
+            else:
+                self._state.set_instance_ref(ref_id, value)
+        self._ui = None
+
+    def active_parameter_ref_ids(self) -> frozenset[str]:
+        self.ui()
+        return frozenset(self._state.active_param_refs())
+
+    @property
+    def indexer(self) -> ApplicationIndexer:
+        return self._idx

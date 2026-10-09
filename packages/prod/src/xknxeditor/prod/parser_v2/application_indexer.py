@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import re
+import warnings
+
 from xknxeditor.namespaces.intermediate import (
     ApplicationProgram,
     ApplicationProgramStaticParametersUnion,
     ModuleDef,
     ModuleDefStaticParametersUnion,
     ParameterType,
+)
+from xknxeditor.namespaces.intermediate.application_program_static_t_messages_message import (
+    ApplicationProgramStaticMessagesMessage,
 )
 from xknxeditor.namespaces.intermediate.com_object_ref_t import ComObjectRef
 from xknxeditor.namespaces.intermediate.com_object_t import ComObject
@@ -23,17 +29,23 @@ class ApplicationIndexer:
     """Prebuilt indexes over the static IR (parameters, refs, types, module defs)."""
 
     __slots__ = (
+        "_calc_sides",
         "_calculations",
+        "_plans",
         "allocators",
         "app_allocators",
         "arg_alloc",
         "code_segments",
         "com_object_refs",
         "com_objects",
+        "messages",
         "module_defs",
         "parameter_refs",
         "parameter_types",
         "parameters",
+        "ref_owner",
+        "refs_by_name",
+        "refs_by_number",
         "script",
     )
 
@@ -46,6 +58,12 @@ class ApplicationIndexer:
         self.com_object_refs: dict[str, ComObjectRef] = {}
         self.code_segments: dict[str, SegmentBase] = {}
         self._calculations: dict[str, dict[str, list[ParameterCalculation]]] = {}
+        self._calc_sides: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
+        self._plans: dict[str, tuple[tuple[ParameterCalculation, str], ...]] = {}
+        self.ref_owner: dict[str, str | None] = {}
+        self.refs_by_name: dict[str | None, dict[str, str]] = {}
+        self.refs_by_number: dict[str | None, dict[int, str]] = {}
+        self.messages: dict[str, ApplicationProgramStaticMessagesMessage] = {}
         self.script: str | None = None
         self.allocators: dict[str, dict[str, Allocator]] = {}
         # Application-level allocators: a module argument's Allocator can be defined on the
@@ -79,6 +97,10 @@ class ApplicationIndexer:
         if s.parameter_refs is not None:
             for pr in s.parameter_refs.parameter_ref:
                 self.parameter_refs[pr.id] = pr
+                self._index_ref_lookup(pr, None)
+        if s.messages is not None:
+            for msg in s.messages.message:
+                self.messages[msg.id] = msg
         if s.com_object_table is not None:
             for co in s.com_object_table.com_object:
                 self.com_objects[co.id] = co
@@ -98,6 +120,131 @@ class ApplicationIndexer:
         if seg is None:
             return 0
         return int(getattr(seg, "address", getattr(seg, "offset", 0)))
+
+    _REF_NUMBER = re.compile(r"_R-([0-9]+)$")
+
+    def _index_ref_lookup(self, pr: ParameterRef, owner: str | None) -> None:
+        self.ref_owner[pr.id] = owner
+        base = self.parameters.get(pr.ref_id)
+        name = getattr(base, "name", None)
+        if name:
+            self.refs_by_name.setdefault(owner, {}).setdefault(name, pr.id)
+        m = self._REF_NUMBER.search(pr.id)
+        if m:
+            self.refs_by_number.setdefault(owner, {}).setdefault(int(m.group(1)), pr.id)
+
+    def default_value(self, ref_id: str) -> str | None:
+        """Value of a ParameterRef that has never been set."""
+        pr = self.parameter_refs.get(ref_id)
+        if pr is None:
+            return None
+        if pr.value is not None:
+            return pr.value
+        base = self.parameters.get(pr.ref_id)
+        return base.value if base is not None else None
+
+    def type_of(self, ref_id: str) -> object | None:
+        """The ParameterType restriction (TypeNumber, TypeText, ...) of a ParameterRef."""
+        pr = self.parameter_refs.get(ref_id)
+        if pr is None:
+            return None
+        base = self.parameters.get(pr.ref_id)
+        if base is None:
+            return None
+        pt = self.parameter_types.get(base.parameter_type)
+        return pt.choice if pt is not None else None
+
+    def parameter_name(self, ref_id: str) -> str | None:
+        pr = self.parameter_refs.get(ref_id)
+        base = self.parameters.get(pr.ref_id) if pr is not None else None
+        return getattr(base, "name", None)
+
+    def message_text(self, key: object) -> str | None:
+        """Message text by number (``M-<n>``) or by name."""
+        for msg in self.messages.values():
+            if isinstance(key, (int, float)) and not isinstance(key, bool):
+                if msg.id.endswith(f"_M-{int(key)}"):
+                    return msg.text
+            elif msg.name == key or msg.id == key:
+                return msg.text
+        return None
+
+    def calculation_plan(
+        self, ref_id: str
+    ) -> tuple[tuple[ParameterCalculation, str], ...]:
+        """Calculations a change of ``ref_id`` triggers, topologically sorted, each once.
+
+        The direction is ``"LR"`` when the triggering parameter is on the L side and
+        ``"RL"`` when it is on the R side.
+        """
+        cached = self._plans.get(ref_id)
+        if cached is not None:
+            return cached
+        order: list[tuple[ParameterCalculation, str]] = []
+        chosen: set[str] = set()
+        frontier = [ref_id]
+        seen = {ref_id}
+        while frontier:
+            ref = frontier.pop(0)
+            sides = self._calculations.get(ref, {})
+            for side, direction in (("l", "LR"), ("r", "RL")):
+                for calc in sides.get(side, []):
+                    if calc.id in chosen:
+                        continue
+                    chosen.add(calc.id)
+                    order.append((calc, direction))
+                    for out in self._outputs(calc, direction):
+                        if out not in seen:
+                            seen.add(out)
+                            frontier.append(out)
+        plan = self._toposort(order)
+        self._plans[ref_id] = plan
+        return plan
+
+    def _sides(
+        self, calc: ParameterCalculation
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        cached = self._calc_sides.get(calc.id)
+        if cached is None:
+            cached = (
+                frozenset(pr.ref_id for pr in calc.lparameters.parameter_ref_ref),
+                frozenset(pr.ref_id for pr in calc.rparameters.parameter_ref_ref),
+            )
+            self._calc_sides[calc.id] = cached
+        return cached
+
+    def _outputs(self, calc: ParameterCalculation, direction: str) -> frozenset[str]:
+        left, right = self._sides(calc)
+        return right if direction == "LR" else left
+
+    def _inputs(self, calc: ParameterCalculation, direction: str) -> frozenset[str]:
+        left, right = self._sides(calc)
+        return left if direction == "LR" else right
+
+    def _toposort(
+        self, order: list[tuple[ParameterCalculation, str]]
+    ) -> tuple[tuple[ParameterCalculation, str], ...]:
+        n = len(order)
+        deps: list[set[int]] = [set() for _ in range(n)]
+        for a in range(n):
+            out_a = self._outputs(*order[a])
+            for b in range(n):
+                if a != b and out_a & self._inputs(*order[b]):
+                    deps[b].add(a)
+        done: list[int] = []
+        placed: set[int] = set()
+        while len(done) < n:
+            ready = [i for i in range(n) if i not in placed and deps[i] <= placed]
+            if not ready:
+                rest = [i for i in range(n) if i not in placed]
+                warnings.warn(
+                    f"cyclic parameter calculations: {[order[i][0].id for i in rest]}",
+                    stacklevel=2,
+                )
+                ready = rest[:1]
+            done.append(ready[0])
+            placed.add(ready[0])
+        return tuple(order[i] for i in done)
 
     def calculations_for_l(self, ref_id: str) -> list[ParameterCalculation]:
         return self._calculations.get(ref_id, {}).get("l", [])
@@ -129,6 +276,7 @@ class ApplicationIndexer:
         if md.static.parameter_refs is not None:
             for pr in md.static.parameter_refs.parameter_ref:
                 self.parameter_refs[pr.id] = pr
+                self._index_ref_lookup(pr, md.id)
         if md.static.com_objects is not None:
             for co in md.static.com_objects.com_object:
                 self.com_objects[co.id] = co
