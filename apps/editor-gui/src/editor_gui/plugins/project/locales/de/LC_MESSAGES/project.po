@@ -1143,3 +1143,45 @@ msgstr "Keine Verbindung zum Bus."
 
 msgid "Parameter value cannot be set, because validation failed."
 msgstr "Der Parameterwert kann nicht gesetzt werden, da die Validierung fehlgeschlagen ist."
+
+msgid "Operations"
+msgstr "Vorgänge"
+
+msgid "Active"
+msgstr "Aktiv"
+
+msgid "Cancel all"
+msgstr "Alle abbrechen"
+
+msgid "Clear History"
+msgstr "Verlauf löschen"
+
+msgid "No operations."
+msgstr "Keine Vorgänge."
+
+msgid "Downloading"
+msgstr "Wird heruntergeladen"
+
+msgid "Waiting"
+msgstr "Wartend"
+
+msgid "Finished"
+msgstr "Beendet"
+
+msgid "Canceled"
+msgstr "Abgebrochen"
+
+msgid "failed"
+msgstr "fehlgeschlagen"
+
+msgid "No details available"
+msgstr "Keine Details verfügbar"
+
+msgid "Connection: {connection}"
+msgstr "Verbindung: {connection}"
+
+msgid "Start: {time}"
+msgstr "Start: {time}"
+
+msgid "End: {time}"
+msgstr "Ende: {time}"

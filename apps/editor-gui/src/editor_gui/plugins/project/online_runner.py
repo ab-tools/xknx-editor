@@ -73,8 +73,10 @@ class OnlineButtonRunner:
             return None
         conn = self._connection
         if conn.not_connected(S.SCRIPT_OPERATION) or conn.xknx is None:
+            item.message = S.SCRIPT_NOT_CONNECTED
             return None
         if not device.individual_address:
+            item.message = S.BUTTON_NO_VALID_ADDRESS
             self._fail(device, run, S.BUTTON_NO_VALID_ADDRESS)
             return None
         if device.script_running or not conn.begin_operation(

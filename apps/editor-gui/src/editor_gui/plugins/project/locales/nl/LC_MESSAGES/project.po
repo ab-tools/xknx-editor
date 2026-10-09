@@ -639,3 +639,48 @@ msgstr "Geen verbinding met de bus."
 
 msgid "Parameter value cannot be set, because validation failed."
 msgstr "De parameterwaarde kan niet worden ingesteld, omdat de validatie is mislukt."
+
+msgid "Operations"
+msgstr "Bewerkingen"
+
+msgid "Active"
+msgstr "Actief"
+
+msgid "Cancel all"
+msgstr "Alles annuleren"
+
+msgid "Clear History"
+msgstr "Geschiedenis wissen"
+
+msgid "No operations."
+msgstr "Geen bewerkingen."
+
+msgid "Download"
+msgstr "Download"
+
+msgid "Downloading"
+msgstr "Wordt gedownload"
+
+msgid "Waiting"
+msgstr "Wachtend"
+
+msgid "Finished"
+msgstr "Voltooid"
+
+msgid "Canceled"
+msgstr "Geannuleerd"
+
+msgid "failed"
+msgstr "mislukt"
+
+msgid "No details available"
+msgstr "Geen details beschikbaar"
+
+msgid "Connection: {connection}"
+msgstr "Verbinding: {connection}"
+
+msgid "Start: {time}"
+msgstr "Start: {time}"
+
+msgid "End: {time}"
+msgstr "Einde: {time}"

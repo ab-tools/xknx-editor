@@ -277,6 +277,11 @@ class ConnectionPlugin:
                     error=f"{type(feature_err).__name__}: {feature_err}",
                 )
             self._api.connection.interface_max_apdu_length = interface_apdu
+            self._api.connection.interface_name = (
+                self._gateway_info.name
+                if self._gateway_info
+                else self._connection_target
+            )
             self._api.connection.set_connection(self._xknx, asyncio.get_running_loop())
             self._api.connection.dispatch_connected()
             self._log.info("connected", target=self._connection_target)

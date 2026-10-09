@@ -89,14 +89,17 @@ class ProjectPlugin:
             is_busy=lambda: api.connection.busy_operation is not None,
             start=self._start_program,
             submit=api.main_thread.submit if api.main_thread is not None else None,
+            connection=lambda item: api.connection.connection_label(
+                with_address=item.script is None
+            ),
         )
         self._program_queue_panel = ProgramQueuePanel(
-            get_current=lambda: self._program_queue.current,
-            get_queued=lambda: self._program_queue.queued,
+            get_active=lambda: self._program_queue.active,
+            get_history=lambda: self._program_queue.history,
             get_progress=lambda: api.connection.busy_progress,
-            on_cancel=self._program_queue.cancel,
-            on_clear=self._program_queue.clear_queued,
-            on_cancel_current=self._program_queue.cancel_current,
+            on_cancel=self._program_queue.cancel_item,
+            on_cancel_all=self._program_queue.cancel_all,
+            on_clear_history=self._program_queue.clear_history,
         )
         self._online_runner = OnlineButtonRunner(
             api.project,
@@ -314,6 +317,12 @@ class ProjectPlugin:
                 label=S.PANEL_PROJECT_LOG,
                 dock="RightSpace",
                 render=self._project_log_panel.render,
+            ),
+            PanelDefinition(
+                name="operations",
+                label=S.PANEL_OPERATIONS,
+                dock="RightSpace",
+                render=self._program_queue_panel.render,
             ),
         ]
 
@@ -1172,6 +1181,8 @@ class ProjectPlugin:
             device, item.scope, self._group_communication_for(device)
         )
         if future is None:
+            if self._api.connection.xknx is None:
+                item.message = S.SCRIPT_NOT_CONNECTED
             self._api.log.debug(
                 "program: cannot start, not connected",
                 plugin="project",
@@ -1212,12 +1223,12 @@ class ProjectPlugin:
     def tick_program_queue(self) -> None:
         self._program_queue.tick()
 
-    @property
-    def program_queue_visible(self) -> bool:
-        return self._program_queue.visible
-
-    def render_program_queue(self) -> None:
-        self._program_queue_panel.render()
+    def take_operations_focus(self) -> bool:
+        """Whether an operation was queued since the last call; selects the Active tab if so."""
+        if not self._program_queue.take_focus_request():
+            return False
+        self._program_queue_panel.select_active()
+        return True
 
     def _record_commissioning(self, node_id: int, scope_value: str) -> None:
         flags = _COMMISSIONING_BY_SCOPE.get(scope_value)

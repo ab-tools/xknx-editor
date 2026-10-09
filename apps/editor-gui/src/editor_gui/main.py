@@ -2100,30 +2100,26 @@ class KnxGuiApp:
         self._connection_plugin.render_window()
         self._render_welcome()
         # Programming queue: advance it every frame (robust wakeup even if the bus was freed by a
-        # non-queue op), and while devices wait behind the running one show the queue window instead
-        # of the standalone program overlay (no double progress bar).
+        # non-queue op) and bring the Operations panel to the front when something was queued.
         self._project_plugin.tick_program_queue()
-        queue_visible = self._project_plugin.program_queue_visible
-        if queue_visible:
-            self._project_plugin.render_program_queue()
+        if self._project_plugin.take_operations_focus():
+            hello_imgui.get_runner_params().docking_params.focus_dockable_window(
+                f"{_DOCK_LABELS['operations']()}###operations"
+            )
         self._render_command_palette()
-        self._render_bus_operation_overlay(suppress_program=queue_visible)
+        self._render_bus_operation_overlay()
         self._render_toasts()
 
-    def _render_bus_operation_overlay(self, suppress_program: bool = False) -> None:
-        """Non-blocking progress overlay shown while a device is being programmed/tested. Determinate
-        bar from the download's (done, total); indeterminate animated bar until totals are known."""
+    def _render_bus_operation_overlay(self) -> None:
+        """Non-blocking progress overlay shown while a device is being tested. Determinate bar from the
+        operation's (done, total); indeterminate animated bar until totals are known."""
         busy = self._connection_service.busy_operation
         if busy is None:
             return
         kind, address = busy
-        if kind == "script" or (kind == "program" and suppress_program):
-            return  # the programming-queue window shows this op's progress instead
-        label = (
-            S.STATUS_PROGRAMMING.format(address=address)
-            if kind == "program"
-            else S.STATUS_TESTING.format(address=address)
-        )
+        if kind in ("script", "program"):
+            return  # the Operations panel shows this op's progress instead
+        label = S.STATUS_TESTING.format(address=address)
         vp = imgui.get_main_viewport()
         pos = imgui.ImVec2(
             vp.work_pos.x + vp.work_size.x * 0.5,
@@ -2636,6 +2632,7 @@ def _dock_label_getters() -> "dict[str, Callable[[], str]]":
         "tools": lambda: _proj.PANEL_TOOLS,
         "history": lambda: _proj.PANEL_HISTORY,
         "project_info": lambda: _proj.PANEL_PROJECT_INFO,
+        "operations": lambda: _proj.PANEL_OPERATIONS,
         "catalog": lambda: _cat.PANEL_CATALOG,
         "topology": lambda: _topology.PANEL_TOPOLOGY,
         "monitor": lambda: _monitor.PANEL_MONITOR,
