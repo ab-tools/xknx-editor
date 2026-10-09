@@ -7,7 +7,7 @@ import platform
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +119,20 @@ def _parameter_instance_refs(
     return [
         ParameterInstanceRef(ref_id=ref_id, value=value) for ref_id, value in parameters
     ]
+
+
+def _row_values(obj: Any) -> tuple[Any, ...]:
+    return tuple(getattr(obj, column.key) for column in obj.__table__.columns)
+
+
+def _device_source_key(row: Any) -> tuple[Any, ...]:
+    """Everything a device is built from: its program, parameters, module instances, com objects."""
+    return (
+        row.hardware2program_ref_id,
+        tuple(_row_values(p) for p in row.parameters),
+        tuple(_row_values(mi) for mi in row.module_instances),
+        tuple(_row_values(co) for co in row.com_objects),
+    )
 
 
 def _qualified_com_object_ref(co_row: Any, app_program_id: str) -> str:
@@ -329,7 +343,7 @@ class DeviceProduct:
 
 
 @contextmanager
-def _gc_paused() -> Iterator[None]:
+def _gc_paused() -> Generator[None]:
     """Pause the cyclic garbage collector, restoring its previous state afterwards."""
     enabled = gc.isenabled()
     gc.disable()
@@ -367,6 +381,8 @@ class ProjectService:
         self.build_progress: Callable[[int, int, str], None] | None = None
         self._devices_cache: list[Device] | None = None
         self._unloaded_devices: list[UnloadedDevice] = []
+        # Per device, the stored data it was last built from (see _device_source_key).
+        self._build_keys: dict[int, tuple[Any, ...]] = {}
         self._areas_cache: list[_Area] | None = None
         self._lines_cache: dict[int, list[_Line]] | None = None
         self._ga_cache: list[_GroupAddress] | None = None
@@ -865,6 +881,7 @@ class ProjectService:
 
     def _reset(self) -> None:
         self._devices_cache = None
+        self._build_keys.clear()
         self._areas_cache = None
         self._lines_cache = None
         self._ga_cache = None
@@ -1004,6 +1021,7 @@ class ProjectService:
             # is inspected or edited. This keeps memory bounded to the active device.
             device.get_visible_com_objects()
             device.release_dynamic_ui()
+            self._build_keys[row.id] = _device_source_key(row)
             return device
         except Exception as e:
             # Building the device (evaluating its dynamic UI from the .knxprod) failed — log the
@@ -1017,10 +1035,30 @@ class ProjectService:
             )
             return None
 
+    def _reuse_device(self, row: Any, previous: dict[int, Device]) -> Device | None:
+        """The already built device for ``row`` if nothing it was built from has changed since.
+
+        Only its name, description and individual address are refreshed then. Rebuilding every
+        device after e.g. an address change would load every application again."""
+        old = previous.get(row.id)
+        if (
+            old is None
+            or old.app is not self._app_cache.get(row.hardware2program_ref_id or "")
+            or self._build_keys.get(row.id) != _device_source_key(row)
+        ):
+            return None
+        assert self._pid is not None
+        old.name = row.name
+        old.product_name = row.product_name or ""
+        old.description = row.description
+        old.individual_address = self._svc.individual_address(self._pid, row.id) or ""
+        return old
+
     @property
     @io_guarded(list)
     def devices(self) -> list[Device]:
         if self._devices_cache is None or self._devices_cache_version != self._version:
+            previous = {d.node_id: d for d in self._devices_cache or []}
             devices: list[Device] = []
             unloaded: list[UnloadedDevice] = []
             if self._pid is not None:
@@ -1033,7 +1071,9 @@ class ProjectService:
                 # rescan all of them over and over, which dominates the load time.
                 with _gc_paused():
                     for i, row in enumerate(rows, start=1):
-                        device = self._build_device(row)
+                        device = self._reuse_device(
+                            row, previous
+                        ) or self._build_device(row)
                         if device is None:
                             unloaded.append(
                                 UnloadedDevice(
