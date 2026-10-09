@@ -1,12 +1,18 @@
-"""Unit tests for the programming queue (no bus): sequencing, dedupe, cancel, advance, visibility."""
+"""Unit tests for the programming queue (no bus): sequencing, dedupe, cancel, advance, history."""
 
 from __future__ import annotations
 
 from concurrent.futures import Future
 from typing import Any
 
-from editor_gui.plugins.project.program_queue import ProgramQueue, QueueItem, ScriptRun
+from editor_gui.plugins.project.program_queue import (
+    OperationState,
+    ProgramQueue,
+    QueueItem,
+    ScriptRun,
+)
 from xknxeditor.prod.parser_v2.ui import UiButton
+from xknxeditor.prod.script import ScriptAborted, ScriptError
 
 
 class _Harness:
@@ -21,6 +27,7 @@ class _Harness:
             is_busy=lambda: self.busy,
             start=self._start,
             submit=None,  # run advance inline
+            connection=lambda item: f"iface {item.node_id}",
         )
 
     def _start(self, item: QueueItem) -> Future[Any] | None:
@@ -32,11 +39,15 @@ class _Harness:
         self._futures[item.node_id] = fut
         return fut
 
-    def finish(self, node_id: int, *, error: bool = False) -> None:
+    def finish(
+        self, node_id: int, *, error: bool = False, exc: BaseException | None = None
+    ) -> None:
         """Complete a running device's future (bus frees, queue advances)."""
         self.busy = False
         fut = self._futures.pop(node_id)
-        if error:
+        if exc is not None:
+            fut.set_exception(exc)
+        elif error:
             fut.set_exception(RuntimeError("boom"))
         else:
             fut.set_result(None)
@@ -48,22 +59,28 @@ def _item(node_id: int, scope: str = "FULL") -> QueueItem:
     )  # type: ignore[arg-type]
 
 
-def test_idle_enqueue_starts_immediately_no_panel() -> None:
+def test_idle_enqueue_starts_immediately() -> None:
     h = _Harness()
     h.queue.enqueue(_item(1))
     assert h.started == [1]
-    assert h.queue.current is not None and h.queue.current.node_id == 1
+    current = h.queue.current
+    assert current is not None and current.node_id == 1
+    assert current.state is OperationState.RUNNING
+    assert current.connection == "iface 1"
+    assert current.started_at is not None and current.ended_at is None
     assert h.queue.queued == []
-    assert h.queue.visible is False  # a lone programming shows no panel
+    assert h.queue.take_focus_request() is True
+    assert h.queue.take_focus_request() is False
 
 
-def test_second_press_while_busy_queues_and_shows_panel() -> None:
+def test_second_press_while_busy_queues() -> None:
     h = _Harness()
     h.queue.enqueue(_item(1))  # runs
     h.queue.enqueue(_item(2))  # busy -> queued
     assert h.started == [1]
     assert [q.node_id for q in h.queue.queued] == [2]
-    assert h.queue.visible is True
+    assert [q.node_id for q in h.queue.active] == [1, 2]
+    assert h.queue.queued[0].state is OperationState.WAITING
 
 
 def test_fifo_drains_on_completion() -> None:
@@ -77,7 +94,12 @@ def test_fifo_drains_on_completion() -> None:
     assert h.started == [1, 2, 3]
     h.finish(3)
     assert h.queue.current is None and h.queue.queued == []
-    assert h.queue.visible is False
+    assert h.queue.active == []
+    assert [i.node_id for i in h.queue.history] == [3, 2, 1]
+    assert all(i.state is OperationState.FINISHED for i in h.queue.history)
+    assert all(i.ended_at is not None for i in h.queue.history)
+    h.queue.clear_history()
+    assert h.queue.history == []
 
 
 def test_dedupe_updates_scope_no_duplicate() -> None:
@@ -95,17 +117,24 @@ def test_continue_on_error_advances() -> None:
     h.queue.enqueue(_item(2))
     h.finish(1, error=True)  # device 1 failed
     assert h.started == [1, 2]  # queue still advances to 2
+    failed = h.queue.history[0]
+    assert failed.state is OperationState.FAILED
+    assert failed.message == "boom"
 
 
-def test_cancel_and_clear_queued() -> None:
+def test_cancel_waiting_items() -> None:
     h = _Harness()
-    for n in (1, 2, 3):
+    for n in (1, 2, 3, 4):
         h.queue.enqueue(_item(n))
     h.queue.cancel(2)
-    assert [q.node_id for q in h.queue.queued] == [3]
-    h.queue.clear_queued()
+    assert [q.node_id for q in h.queue.queued] == [3, 4]
+    h.queue.cancel_item(h.queue.queued[0])
+    assert [q.node_id for q in h.queue.queued] == [4]
+    h.queue.cancel_all()
     assert h.queue.queued == []
-    # the running device is untouched by cancel/clear
+    assert [i.node_id for i in h.queue.history] == [4, 3, 2]
+    assert all(i.state is OperationState.CANCELED for i in h.queue.history)
+    # a running download cannot be interrupted
     assert h.queue.current is not None and h.queue.current.node_id == 1
 
 
@@ -116,6 +145,7 @@ def test_start_none_drops_and_advances() -> None:
     # neither could start; both dropped, nothing left running or queued
     assert h.queue.current is None
     assert h.queue.queued == []
+    assert [i.state for i in h.queue.history] == [OperationState.FAILED] * 2
 
 
 def test_tick_does_not_double_start_when_busy() -> None:
@@ -138,10 +168,9 @@ def _script_item(node_id: int) -> QueueItem:
     )
 
 
-def test_script_runs_show_the_panel_and_are_not_deduped() -> None:
+def test_script_runs_are_not_deduped() -> None:
     h = _Harness()
     h.queue.enqueue(_script_item(1))
-    assert h.queue.visible is True
     h.queue.enqueue(_script_item(1))
     h.queue.enqueue(_script_item(1))
     assert len(h.queue.queued) == 2
@@ -158,3 +187,18 @@ def test_cancel_current_only_flags_a_script() -> None:
     assert h.queue.current is current
     h.finish(1)
     assert h.queue.current is None
+    assert current.state is OperationState.CANCELED
+
+
+def test_script_outcomes() -> None:
+    h = _Harness()
+    h.queue.enqueue(_script_item(1))
+    h.finish(1, exc=ScriptError("Script failed"))
+    h.queue.enqueue(_script_item(2))
+    h.finish(2, exc=ScriptAborted())
+    h.queue.enqueue(_script_item(3))
+    h.finish(3)
+    finished, aborted, failed = h.queue.history
+    assert (failed.state, failed.message) == (OperationState.FAILED, "Script failed")
+    assert (aborted.state, aborted.message) == (OperationState.CANCELED, None)
+    assert (finished.state, finished.message) == (OperationState.FINISHED, None)
