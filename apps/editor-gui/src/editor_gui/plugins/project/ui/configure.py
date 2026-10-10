@@ -404,9 +404,6 @@ class ConfigurePanel:
                             S.CONFIGURE_APPLY_ALL_CHANNELS, self._apply_all_channels
                         )
                     help_text = self._help_text(device)
-                    height = imgui.get_content_region_avail().y
-                    if help_text:
-                        height -= self._help_height()
                     imgui.begin_disabled(device.script_running)
                     render_ui_tree(
                         device,
@@ -415,12 +412,13 @@ class ConfigurePanel:
                         filter_text=self._param_filter,
                         differing_refs=differing,
                         buttons=self._button_actions(multi=len(joint) > 1),
-                        height=height,
                         get_icon=self._icon_getter(device),
+                        footer=(lambda: self._render_help(help_text))
+                        if help_text
+                        else None,
+                        footer_height=self._help_height() if help_text else 0.0,
                     )
                     imgui.end_disabled()
-                    if help_text:
-                        self._render_help(help_text)
                 else:
                     imgui.text_disabled(S.CONFIGURE_NO_DEVICES)
                 imgui.end_tab_item()
