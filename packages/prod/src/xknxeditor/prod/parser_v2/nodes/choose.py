@@ -11,7 +11,8 @@ def _token_matches(value: str, token: str) -> bool:
     """Match one Test token: a comparison (``>0``, ``<=5``, ``!=2``, ``=3``) or a bare literal.
 
     Operator operands are compared as integers, so ``=`` / ``!=`` are numeric equality. A token with
-    no operator prefix is matched as a plain literal.
+    no operator prefix matches numerically when both are numbers (``01`` matches ``1``), else as a
+    plain literal.
     """
     for op in _OPERATORS:
         if token.startswith(op):
@@ -30,7 +31,10 @@ def _token_matches(value: str, token: str) -> bool:
             if op == "!=":
                 return left != right
             return left == right
-    return value == token
+    try:
+        return float(value) == float(token)
+    except ValueError:
+        return value == token
 
 
 def _value_matches(value: str, test_values: list[str]) -> bool:

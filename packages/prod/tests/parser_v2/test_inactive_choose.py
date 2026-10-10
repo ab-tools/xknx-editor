@@ -6,6 +6,7 @@ from pathlib import Path
 
 from xknxeditor.prod.application import parse_application_xml
 from xknxeditor.prod.parser_v2.dynamic import DynamicUI
+from xknxeditor.prod.parser_v2.nodes.choose import satisfies
 from xknxeditor.prod.parser_v2.ui import UiNode, UiParameterBlock, UiSeparator, UiTab
 
 APP = "M-00FA_A-0002-01-0000"
@@ -44,3 +45,14 @@ def test_choose_on_assigned_parameter_follows_the_assign() -> None:
 
 def test_choose_before_its_parameter_is_shown() -> None:
     assert "late-zero" in _texts(_ui().ui())
+
+
+def test_choose_on_block_heading_parameter() -> None:
+    assert "heading-default" in _texts(_ui().ui())
+
+
+def test_numbers_match_regardless_of_leading_zeros() -> None:
+    assert satisfies("01", "1")
+    assert satisfies("0 01", "1")
+    assert not satisfies("01", "2")
+    assert satisfies("abc", "abc")
