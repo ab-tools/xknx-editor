@@ -40,6 +40,16 @@ _log = structlog.get_logger("configure")
 _SPLITTER_HEIGHT = 6.0
 
 
+def _same_line_if_fits(label: str) -> None:
+    """Put the next button beside the previous item if it fits, else below it."""
+    style = imgui.get_style()
+    width = imgui.calc_text_size(label).x + style.frame_padding.x * 2
+    right = imgui.get_item_rect_max().x + style.item_spacing.x + width
+    limit = imgui.get_window_pos().x + imgui.get_window_width() - style.window_padding.x
+    if right <= limit:
+        imgui.same_line()
+
+
 def _device_title(device: Device) -> str:
     return " ".join(p for p in (device.individual_address, device.name) if p)
 
@@ -282,7 +292,7 @@ class ConfigurePanel:
             if imgui.button(S.BTN_EVAL_DEVICE):
                 self._on_eval_device(device, self._download_scope)
             imgui.end_disabled()
-            imgui.same_line()
+            _same_line_if_fits(S.BTN_PROGRAM_DEVICE)
 
         if self._on_program_device is not None:
             enabled = bool(device.individual_address)
@@ -296,7 +306,7 @@ class ConfigurePanel:
                 self._confirm_program_open = False
             self._render_program_confirm(device)
             if self._open_memory_preview is not None:
-                imgui.same_line()
+                _same_line_if_fits(S.BTN_PREVIEW_MEMORY)
 
         if self._open_memory_preview is not None and imgui.button(S.BTN_PREVIEW_MEMORY):
             self._open_memory_preview(device)

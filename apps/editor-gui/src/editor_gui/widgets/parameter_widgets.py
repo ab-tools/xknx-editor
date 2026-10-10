@@ -1484,19 +1484,67 @@ _MIN_NUMBER_CHARS = 3
 _SEPARATOR_ERROR_COLOR = imgui.ImVec4(1.0, 0.42, 0.42, 1.0)
 
 
-def _aligned_text(
-    text: str, alignment: str | None, color: imgui.ImVec4 | None = None
-) -> None:
+def _wrap_width() -> float:
+    """Width up to the visible right edge of the window or the current table column."""
+    style = imgui.get_style()
+    right = imgui.get_scroll_x() + imgui.get_window_width() - style.window_padding.x
+    if imgui.get_scroll_max_y() > 0:
+        right -= style.scrollbar_size
+    x = imgui.get_cursor_pos_x()
+    return max(min(right - x, imgui.get_content_region_avail().x), px(80))
+
+
+def _wrapped_text(text: str, width: float) -> None:
+    imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + width)
+    imgui.text_unformatted(text)
+    imgui.pop_text_wrap_pos()
+
+
+def _aligned_text(text: str, alignment: str | None) -> None:
+    avail = _wrap_width()
     width = imgui.calc_text_size(text).x
-    avail = imgui.get_content_region_avail().x
     if alignment in ("Center", "Right") and "\n" not in text and width < avail:
         offset = (avail - width) / 2 if alignment == "Center" else avail - width
         imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + offset)
-    if color is not None:
-        imgui.push_style_color(imgui.Col_.text, color)
-    imgui.text_wrapped(text)
-    if color is not None:
-        imgui.pop_style_color()
+        avail -= offset
+    _wrapped_text(text, avail)
+
+
+def _render_hint(text: str, color: imgui.ImVec4, glyph: str) -> None:
+    """An information or error text in a tinted box with a round icon."""
+    pad = px(8)
+    icon = imgui.get_font_size() * 1.25
+    width = _wrap_width()
+    text_width = width - pad * 3 - icon
+    text_height = imgui.calc_text_size(text, wrap_width=text_width).y
+    top = imgui.get_cursor_screen_pos()
+    box_max = imgui.ImVec2(top.x + width, top.y + max(text_height, icon) + pad * 2)
+    draw = imgui.get_window_draw_list()
+    rounding = imgui.get_style().frame_rounding
+    draw.add_rect_filled(
+        top,
+        box_max,
+        imgui.get_color_u32(imgui.ImVec4(color.x, color.y, color.z, 0.12)),
+        rounding,
+    )
+    draw.add_rect(
+        top,
+        box_max,
+        imgui.get_color_u32(imgui.ImVec4(color.x, color.y, color.z, 0.6)),
+        rounding,
+    )
+    centre = imgui.ImVec2(top.x + pad + icon / 2, top.y + pad + icon / 2)
+    draw.add_circle_filled(centre, icon / 2, imgui.get_color_u32(color))
+    size = imgui.calc_text_size(glyph)
+    draw.add_text(
+        imgui.ImVec2(centre.x - size.x / 2, centre.y - size.y / 2),
+        imgui.get_color_u32(imgui.ImVec4(1, 1, 1, 1)),
+        glyph,
+    )
+    imgui.set_cursor_screen_pos(imgui.ImVec2(top.x + pad * 2 + icon, top.y + pad))
+    _wrapped_text(text, text_width)
+    imgui.set_cursor_screen_pos(imgui.ImVec2(top.x, box_max.y))
+    imgui.dummy(imgui.ImVec2(width, 0))
 
 
 def _render_separator(sep: UiSeparator) -> None:
@@ -1510,9 +1558,9 @@ def _render_separator(sep: UiSeparator) -> None:
     elif sep.hint == "Headline":
         imgui.separator_text(sep.text)
     elif sep.hint == "Information":
-        _aligned_text(sep.text, sep.alignment, _INFO_COLOR)
+        _render_hint(sep.text, _INFO_COLOR, "i")
     elif sep.hint == "Error":
-        _aligned_text(sep.text, sep.alignment, _SEPARATOR_ERROR_COLOR)
+        _render_hint(sep.text, _SEPARATOR_ERROR_COLOR, "!")
     else:
         _aligned_text(sep.text, sep.alignment)
 

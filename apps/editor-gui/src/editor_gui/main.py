@@ -2585,7 +2585,7 @@ class KnxGuiApp:
 
 
 # Bumped whenever the default docking layout changes, so a stored layout is replaced once.
-_LAYOUT_VERSION = 2
+_LAYOUT_VERSION = 3
 
 
 def create_docking_splits() -> list[hello_imgui.DockingSplit]:
@@ -2593,7 +2593,7 @@ def create_docking_splits() -> list[hello_imgui.DockingSplit]:
     split_right.initial_dock = "MainDockSpace"
     split_right.new_dock = "RightSpace"
     split_right.direction = imgui.Dir.right
-    split_right.ratio = 0.25
+    split_right.ratio = 0.19
 
     split_device = hello_imgui.DockingSplit()
     split_device.initial_dock = "RightSpace"
@@ -2613,7 +2613,7 @@ def create_docking_splits() -> list[hello_imgui.DockingSplit]:
     split_left.direction = imgui.Dir.left
     # Wide enough that the stacked navigation tabs (Buildings, Devices, Group Addresses, Catalog)
     # all fit without the tab-bar overflow (">>") arrow.
-    split_left.ratio = 0.34
+    split_left.ratio = 0.3
 
     return [split_right, split_device, split_bottom, split_left]
 
