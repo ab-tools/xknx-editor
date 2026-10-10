@@ -185,6 +185,15 @@ def render_param_widget(
             if deferred_enum:
                 if imgui.button(f"{preview}##{widget_id}", imgui.ImVec2(-1, 0)):
                     return EnumPopupRequest(device=None, param=param)  # type: ignore[arg-type]
+            elif w.radio:
+                for i, choice in enumerate(w.choices):
+                    if i:
+                        imgui.same_line()
+                    selected = not differs and str(choice.value) == param.value
+                    if _small_radio(
+                        f"{choice.label}##{widget_id}_{i}", selected, first=i == 0
+                    ):
+                        on_change(str(choice.value))
             else:
                 if imgui.begin_combo(f"##{widget_id}", preview):
                     for choice in w.choices:
@@ -264,6 +273,19 @@ def _small_checkbox(label: str, checked: bool) -> tuple[bool, bool]:
     return result
 
 
+def _small_radio(label: str, active: bool, *, first: bool) -> bool:
+    """A radio button about the size of the text, centred in a row of full-height fields;
+    the ones after the ``first`` follow on its line."""
+    padding = imgui.get_style().frame_padding
+    small = padding.y / 4
+    if first:
+        imgui.set_cursor_pos_y(imgui.get_cursor_pos_y() + padding.y - small)
+    imgui.push_style_var(imgui.StyleVar_.frame_padding, imgui.ImVec2(padding.x, small))
+    pressed = imgui.radio_button(label, active)
+    imgui.pop_style_var()
+    return pressed
+
+
 def _render_text_param(
     widget_id: str,
     value: str,
@@ -288,10 +310,6 @@ def _render_float_param(
     """A float with the regional decimal separator; an entry is stored when editing ends."""
     regional = regional_format()
     shown = "" if differs else format_float(value, decimal=regional.decimal)
-    chars = max(
-        len(general_float(widget.min)), len(general_float(widget.max)), len(shown)
-    )
-    _set_number_field_width(chars, spin=False)
     if differs:
         _, text = imgui.input_text_with_hint(f"##{widget_id}", S.PARAM_DIFFERS, "")
     else:
@@ -1338,13 +1356,10 @@ def _render_grid_cells(
 
 
 def _render_cell_separator(sep: UiSeparator) -> None:
-    """A separator in a grid cell: a headline as plain text, a label dimmed, a ruler across."""
-    if sep.hint == "Headline" and sep.text:
+    """A separator in a grid cell: a headline or label as plain text, a ruler across."""
+    if sep.text and sep.hint in ("Headline", None):
         imgui.align_text_to_frame_padding()
         imgui.text(sep.text)
-    elif sep.hint is None and sep.text:
-        imgui.align_text_to_frame_padding()
-        imgui.text_disabled(sep.text)
     else:
         _render_separator(sep)
 
@@ -1405,14 +1420,25 @@ def _render_param_table(
     if not params:
         return None
     popup_request: EnumPopupRequest | None = None
-    table_flags = (
-        imgui.TableFlags_.no_saved_settings | imgui.TableFlags_.sizing_stretch_prop
+    table_flags = imgui.TableFlags_.no_saved_settings
+    # Labels and values sit at the same positions as the columns of grids on the page.
+    reference = min(imgui.get_content_region_avail().x, px(_GRID_REFERENCE_WIDTH))
+    label_width = reference * _LIST_LABEL_SHARE
+    padding = imgui.get_style().cell_padding
+    imgui.push_style_var(imgui.StyleVar_.cell_padding, imgui.ImVec2(0, padding.y))
+    opened = imgui.begin_table(
+        f"##params_{prefix}", 2, table_flags, imgui.ImVec2(reference, 0)
     )
-    if imgui.begin_table(f"##params_{prefix}", 2, table_flags):
-        # Split label/value proportionally so wide combos (long enum labels) get real room
-        # instead of being clipped in a narrow fixed column with a big gap to the left.
-        imgui.table_setup_column("Name", imgui.TableColumnFlags_.width_stretch, 1.0)
-        imgui.table_setup_column("Value", imgui.TableColumnFlags_.width_stretch, 1.0)
+    imgui.pop_style_var()
+    if opened:
+        imgui.table_setup_column(
+            "Name", imgui.TableColumnFlags_.width_fixed, label_width
+        )
+        # Values such as a row of radio buttons may reach past the column.
+        imgui.table_setup_column(
+            "Value",
+            imgui.TableColumnFlags_.width_stretch | imgui.TableColumnFlags_.no_clip,
+        )
         for param in params:
             imgui.table_next_row()
             if isinstance(param, UiButton):
@@ -1420,7 +1446,8 @@ def _render_param_table(
                 _render_button(device, param, prefix, buttons)
                 continue
             imgui.table_set_column_index(0)
-            indent = param.indent_level * px(12.0)
+            # Each level indents by two spaces, as grid row labels do with leading spaces.
+            indent = param.indent_level * imgui.calc_text_size("  ").x
             if indent > 0:
                 imgui.indent(indent)
             label = param.label
@@ -1432,15 +1459,22 @@ def _render_param_table(
             if changed:
                 imgui.text_colored(_CHANGED_COLOR, "*")
                 imgui.same_line(0, px(4))
-                imgui.text_colored(_CHANGED_COLOR, label)
+                imgui.push_style_color(imgui.Col_.text, _CHANGED_COLOR)
+                imgui.text_wrapped(label)
+                imgui.pop_style_color()
                 if imgui.is_item_hovered():
                     imgui.set_tooltip(
                         S.PARAM_CHANGED_TOOLTIP.format(default=_default_display(param))
                     )
             elif isinstance(param.widget, RawDataWidget):
-                imgui.text_disabled(label)
+                imgui.push_style_color(
+                    imgui.Col_.text,
+                    imgui.get_style_color_vec4(imgui.Col_.text_disabled),
+                )
+                imgui.text_wrapped(label)
+                imgui.pop_style_color()
             else:
-                imgui.text(label)
+                imgui.text_wrapped(label)
             _track_help(param.help_context)
             if indent > 0:
                 imgui.unindent(indent)
@@ -1485,6 +1519,8 @@ _INFO_COLOR = imgui.ImVec4(0.45, 0.72, 1.0, 1.0)
 _MIN_STRETCH_COLUMN = 80.0
 # Page width at 100 % scaling that percentage column widths of a grid refer to.
 _GRID_REFERENCE_WIDTH = 540.0
+# Share of that width the labels of a parameter list take.
+_LIST_LABEL_SHARE = 0.45
 # Gap at 100 % scaling a field in a grid cell leaves to the next column.
 _CELL_GAP = 6.0
 # Characters a number field has room for at least.
