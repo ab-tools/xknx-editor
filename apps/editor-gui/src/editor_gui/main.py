@@ -2585,7 +2585,7 @@ class KnxGuiApp:
 
 
 # Bumped whenever the default docking layout changes, so a stored layout is replaced once.
-_LAYOUT_VERSION = 3
+_LAYOUT_VERSION = 4
 
 
 def create_docking_splits() -> list[hello_imgui.DockingSplit]:
@@ -2599,7 +2599,7 @@ def create_docking_splits() -> list[hello_imgui.DockingSplit]:
     split_device.initial_dock = "RightSpace"
     split_device.new_dock = "DeviceSpace"
     split_device.direction = imgui.Dir.up
-    split_device.ratio = 0.5
+    split_device.ratio = 0.35
 
     split_bottom = hello_imgui.DockingSplit()
     split_bottom.initial_dock = "MainDockSpace"
