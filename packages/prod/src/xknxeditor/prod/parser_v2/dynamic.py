@@ -290,6 +290,7 @@ class DynamicTreeBuilder:
                 [self._build(child) for child in elem.choice],
                 id=f"{self._app_id}_general",
                 name="General",
+                independent=True,
             )
         elif isinstance(elem, ApplicationProgramChannel):
             return ChannelNode(

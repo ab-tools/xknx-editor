@@ -72,5 +72,6 @@ class ComObjectParameterBlockNode(DynamicNode):
                     i for i, r in enumerate(rows, start=1) if r.collapse_if_empty
                 ),
                 cell=self._elem.cell,
+                icon=self._elem.icon,
             )
         ]

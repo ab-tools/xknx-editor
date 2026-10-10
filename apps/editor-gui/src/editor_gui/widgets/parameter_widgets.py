@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -10,6 +11,7 @@ from editor_gui.device import Device
 from editor_gui.regional import regional_format
 from editor_gui.widgets.dpi import px
 from editor_gui.widgets.float_format import format_float, general_float, parse_float
+from editor_gui.widgets.icons import Icon, draw_icon
 from editor_gui.widgets.strings import S
 from editor_gui.widgets.time_format import (
     format_time,
@@ -674,6 +676,167 @@ def _tab_label(tab: UiTab) -> str:
     return _instance_label(tab.text or tab.name or tab.id or "Tab", tab.id)
 
 
+@dataclass(frozen=True, slots=True)
+class ParameterPage:
+    """A channel or parameter page in the page tree."""
+
+    key: str
+    label: str
+    icon: str | None
+    content: tuple[UiNode, ...]  # shown when the page is selected
+    children: tuple[ParameterPage, ...] = ()
+    block: UiParameterBlock | None = None
+    selectable: bool = True
+
+
+def _is_page(node: UiNode) -> bool:
+    return isinstance(node, UiParameterBlock) and not node.inline and not node.hidden
+
+
+def _unique_key(key: str, seen: dict[str, int]) -> str:
+    count = seen.get(key, 0)
+    seen[key] = count + 1
+    return key if count == 0 else f"{key}#{count}"
+
+
+def _has_content(nodes: tuple[UiNode, ...]) -> bool:
+    return any(
+        isinstance(n, (UiParameter, UiButton, UiSeparator))
+        or (isinstance(n, UiParameterBlock) and not n.hidden)
+        for n in nodes
+    )
+
+
+def _split_pages(
+    children: tuple[UiNode, ...], prefix: str, seen: dict[str, int]
+) -> tuple[tuple[UiNode, ...], list[ParameterPage]]:
+    """Separate the content shown on a page from the sub-pages listed below it in the tree."""
+    content: list[UiNode] = []
+    pages: list[ParameterPage] = []
+    for node in children:
+        if isinstance(node, UiTab):
+            key = f"{prefix}_{node.id}"
+            if node.independent:
+                inner, sub = _split_pages(node.children, key, seen)
+                content.extend(inner)
+                pages.extend(sub)
+                continue
+            inner, sub = _split_pages(node.children, key, seen)
+            pages.append(
+                ParameterPage(
+                    key=_unique_key(key, seen),
+                    label=_tab_label(node),
+                    icon=node.icon,
+                    content=inner,
+                    children=tuple(sub),
+                    selectable=_has_content(inner),
+                )
+            )
+        elif _is_page(node):
+            assert isinstance(node, UiParameterBlock)
+            key = f"{prefix}_{node.id}"
+            if node.layout == ParameterBlockLayout.LIST:
+                inner, sub = _split_pages(node.children, key, seen)
+            else:
+                inner, sub = node.children, []
+            pages.append(
+                ParameterPage(
+                    key=_unique_key(key, seen),
+                    label=_instance_label(node.text or node.name or node.id, node.id),
+                    icon=node.icon,
+                    content=inner,
+                    children=tuple(sub),
+                    block=node,
+                )
+            )
+        elif (
+            isinstance(node, UiParameterBlock)
+            and node.inline
+            and not node.hidden
+            and node.layout == ParameterBlockLayout.LIST
+        ):
+            inner, sub = _split_pages(node.children, f"{prefix}_{node.id}", seen)
+            pages.extend(sub)
+            content.append(replace(node, children=inner) if sub else node)
+        else:
+            content.append(node)
+    return tuple(content), pages
+
+
+def build_pages(nodes: list[UiNode], prefix: str) -> tuple[ParameterPage, ...]:
+    """The page tree of a device: channels and parameter pages, as the dialog lists them."""
+    content, pages = _split_pages(tuple(nodes), prefix, {})
+    if _has_content(content):
+        pages.insert(
+            0,
+            ParameterPage(
+                key=f"{prefix}_root", label=S.PAGE_GENERAL, icon=None, content=content
+            ),
+        )
+    return tuple(pages)
+
+
+def filter_pages(
+    pages: tuple[ParameterPage, ...], needle: str
+) -> tuple[ParameterPage, ...]:
+    """Pages whose label or parameters match ``needle``, with the pages leading to them."""
+    result: list[ParameterPage] = []
+    for page in pages:
+        children = filter_pages(page.children, needle)
+        own = needle in page.label.lower() or any(
+            _node_matches(n, needle) for n in page.content
+        )
+        if own or children:
+            result.append(
+                replace(page, children=children, selectable=page.selectable and own)
+            )
+    return tuple(result)
+
+
+def _first_selectable(pages: tuple[ParameterPage, ...]) -> ParameterPage | None:
+    for page in pages:
+        if page.selectable:
+            return page
+        found = _first_selectable(page.children)
+        if found is not None:
+            return found
+    return None
+
+
+def _page_path(
+    pages: tuple[ParameterPage, ...], key: str
+) -> list[ParameterPage] | None:
+    """``key``'s page and the pages above it, top first."""
+    for page in pages:
+        if page.key == key:
+            return [page]
+        below = _page_path(page.children, key)
+        if below is not None:
+            return [page, *below]
+    return None
+
+
+# Device node id -> selected page key.
+_selected_pages: dict[int, str] = {}
+# Device node id -> (UI nodes, filter, pages) of the last page tree built.
+_page_cache: dict[int, tuple[list[UiNode], str, tuple[ParameterPage, ...]]] = {}
+
+_TREE_WIDTH = 240.0
+
+
+def _device_pages(
+    device: Device, nodes: list[UiNode], needle: str
+) -> tuple[ParameterPage, ...]:
+    cached = _page_cache.get(device.node_id)
+    if cached is not None and cached[0] is nodes and cached[1] == needle:
+        return cached[2]
+    pages = build_pages(nodes, str(device.node_id))
+    if needle:
+        pages = filter_pages(pages, needle)
+    _page_cache[device.node_id] = (nodes, needle, pages)
+    return pages
+
+
 def render_ui_tree(
     device: Device,
     nodes: list[UiNode],
@@ -682,51 +845,150 @@ def render_ui_tree(
     filter_text: str = "",
     differing_refs: frozenset[str] = frozenset(),
     buttons: ButtonActions | None = None,
+    *,
+    height: float = 0.0,
+    get_icon: Callable[[str], Icon | None] | None = None,
 ) -> EnumPopupRequest | None:
-    """Tab-bar renderer with per-tab filter and multi-device diff markers."""
+    """The page tree beside the selected page, with filter and multi-device diff markers."""
     if not nodes:
         return None
     needle = filter_text.lower().strip()
+    pages = _device_pages(device, nodes, needle)
+    path = _page_path(pages, _selected_pages.get(device.node_id, ""))
+    if path is None or not path[-1].selectable:
+        first = _first_selectable(pages)
+        path = _page_path(pages, first.key) if first is not None else None
+        if first is not None and not needle:
+            _selected_pages[device.node_id] = first.key
+    selected = path[-1] if path else None
+    opened = frozenset(p.key for p in (path or [])[:-1])
+
+    if height <= 0:
+        height = imgui.get_content_region_avail().y
+    height -= imgui.get_style().cell_padding.y * 2
     popup_request: EnumPopupRequest | None = None
-    tabs = [n for n in nodes if isinstance(n, UiTab)]
-    if tabs:
-        if imgui.begin_tab_bar(f"##tabs_{device.node_id}"):
-            for tab in tabs:
-                if needle and not _node_matches(tab, needle):
-                    continue
-                label = _tab_label(tab)
-                # Key the tab by the stable id suffix only (###), not the label: a param change can
-                # recompute the tab's text (parameter-driven names), and with ## the label folds into
-                # the imgui id, so a changed label loses the selection and jumps back to the first tab.
-                if imgui.begin_tab_item(f"{label}###{device.node_id}_{tab.id}")[0]:
-                    req = _render_children(
-                        device,
-                        tab.children,
-                        on_change,
-                        deferred_enum,
-                        f"{device.node_id}_{tab.id}",
-                        needle,
-                        differing_refs,
-                        buttons,
-                    )
-                    if req is not None:
-                        popup_request = req
-                    imgui.end_tab_item()
-            imgui.end_tab_bar()
+    flags = imgui.TableFlags_.resizable | imgui.TableFlags_.borders_inner_v
+    if imgui.begin_table(f"##pages_{device.node_id}", 2, flags):
+        imgui.table_setup_column(
+            "##tree", imgui.TableColumnFlags_.width_fixed, px(_TREE_WIDTH)
+        )
+        imgui.table_setup_column("##page", imgui.TableColumnFlags_.width_stretch)
+        imgui.table_next_row()
+        imgui.table_next_column()
+        scroll = imgui.WindowFlags_.horizontal_scrollbar
+        if imgui.begin_child("##page_tree", imgui.ImVec2(0, height), 0, scroll):
+            clicked = _render_page_tree(
+                pages,
+                selected.key if selected else None,
+                opened,
+                bool(needle),
+                get_icon,
+            )
+            if clicked is not None:
+                _selected_pages[device.node_id] = clicked
+        imgui.end_child()
+        imgui.table_next_column()
+        if (
+            imgui.begin_child("##page_content", imgui.ImVec2(0, height), 0, scroll)
+            and selected is not None
+        ):
+            popup_request = _render_page(
+                device,
+                selected,
+                on_change,
+                deferred_enum,
+                needle,
+                differing_refs,
+                buttons,
+            )
+        imgui.end_child()
+        imgui.end_table()
+    return popup_request
+
+
+def _render_page_tree(
+    pages: tuple[ParameterPage, ...],
+    selected: str | None,
+    opened: frozenset[str],
+    open_all: bool,
+    get_icon: Callable[[str], Icon | None] | None,
+) -> str | None:
+    """Draw ``pages`` as tree nodes; returns the key of a page clicked this frame."""
+    clicked: str | None = None
+    icon_size = imgui.get_font_size()
+    space = imgui.calc_text_size(" ").x
+    for page in pages:
+        flags = imgui.TreeNodeFlags_.span_avail_width
+        if not page.children:
+            flags |= (
+                imgui.TreeNodeFlags_.leaf | imgui.TreeNodeFlags_.no_tree_push_on_open
+            )
+        if page.selectable:
+            flags |= (
+                imgui.TreeNodeFlags_.open_on_arrow
+                | imgui.TreeNodeFlags_.open_on_double_click
+            )
+        if page.key == selected:
+            flags |= imgui.TreeNodeFlags_.selected
+        if open_all:
+            imgui.set_next_item_open(True, imgui.Cond_.always)
+        elif page.key in opened:
+            imgui.set_next_item_open(True, imgui.Cond_.once)
+        icon = get_icon(page.icon) if get_icon is not None and page.icon else None
+        pad = " " * math.ceil((icon_size + space) / space) if icon is not None else ""
+        is_open = imgui.tree_node_ex(f"{pad}{page.label}###{page.key}", flags)
+        if icon is not None:
+            top = imgui.get_item_rect_min()
+            x = top.x + imgui.get_tree_node_to_label_spacing()
+            y = top.y + (imgui.get_item_rect_size().y - icon_size) / 2
+            draw_icon(icon, imgui.ImVec2(x, y), icon_size)
+        if (
+            page.selectable
+            and imgui.is_item_clicked()
+            and not imgui.is_item_toggled_open()
+        ):
+            clicked = page.key
+        if page.block is not None:
+            _track_help(page.block.help_context)
+        if is_open and page.children:
+            below = _render_page_tree(
+                page.children, selected, opened, open_all, get_icon
+            )
+            clicked = clicked or below
+            imgui.tree_pop()
+    return clicked
+
+
+def _render_page(
+    device: Device,
+    page: ParameterPage,
+    on_change: Callable[[Device, str, str], None],
+    deferred_enum: bool,
+    needle: str,
+    differing_refs: frozenset[str],
+    buttons: ButtonActions | None,
+) -> EnumPopupRequest | None:
+    block = page.block
+    if needle in page.label.lower():
+        needle = ""
+    imgui.begin_disabled(block is not None and block.read_only)
+    if block is not None and block.layout != ParameterBlockLayout.LIST:
+        req = _render_grid_block(
+            device, block, on_change, deferred_enum, page.key, differing_refs, buttons
+        )
     else:
         req = _render_children(
             device,
-            tuple(nodes),
+            page.content,
             on_change,
             deferred_enum,
-            str(device.node_id),
+            page.key,
             needle,
             differing_refs,
             buttons,
         )
-        if req is not None:
-            popup_request = req
-    return popup_request
+    imgui.end_disabled()
+    return req
 
 
 def _render_children(
