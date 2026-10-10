@@ -31,7 +31,7 @@ from editor_gui.widgets.group_objects_widgets import (
     GroupAddressCatalog,
     GroupLinkResolver,
 )
-from editor_gui.widgets.icons import Icon
+from editor_gui.widgets.icons import Icon, Picture
 from editor_gui.widgets.markdown import render_markdown
 from editor_gui.widgets.module_table import build_module_tables, render_module_tables
 
@@ -109,6 +109,7 @@ class ConfigurePanel:
         buttons: ButtonActions | None = None,
         get_help: Callable[[Device, str], str | None] | None = None,
         get_icon: Callable[[Device, str], Icon | None] | None = None,
+        get_picture: Callable[[Device, str], Picture | None] | None = None,
     ) -> None:
         self._get_devices = get_devices
         self._get_selected_device = get_selected_device
@@ -117,6 +118,7 @@ class ConfigurePanel:
         self._buttons = buttons
         self._get_help = get_help
         self._get_icon = get_icon
+        self._get_picture = get_picture
         self._help_pane_h = 0.0  # dragged height of the help pane
         self._help: tuple[int, str] | None = None
         # "Multi fill": when on, a parameter edit is applied to every device that runs
@@ -411,6 +413,7 @@ class ConfigurePanel:
                         differing_refs=differing,
                         buttons=self._button_actions(multi=len(joint) > 1),
                         get_icon=self._icon_getter(device),
+                        get_picture=self._picture_getter(device),
                         footer=(lambda h: self._render_help(help_text, h))
                         if help_text
                         else None,
@@ -765,6 +768,12 @@ class ConfigurePanel:
         if get_icon is None:
             return None
         return lambda name: get_icon(device, name)
+
+    def _picture_getter(self, device: Device) -> Callable[[str], Picture | None] | None:
+        get_picture = self._get_picture
+        if get_picture is None:
+            return None
+        return lambda ref_id: get_picture(device, ref_id)
 
     def _help_text(self, device: Device) -> str | None:
         selected = take_selected_help()

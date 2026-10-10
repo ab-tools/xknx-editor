@@ -33,7 +33,14 @@ from editor_gui.plugins.project.ui.preflight_result import PreflightResultWindow
 from editor_gui.plugins.project.ui.program_queue import ProgramQueuePanel
 from editor_gui.plugins.project.ui.tools import apply_name_swap, shifted_ia
 from editor_gui.widgets import ButtonActions
-from editor_gui.widgets.icons import Icon, has_icon, load_icon
+from editor_gui.widgets.icons import (
+    Icon,
+    Picture,
+    has_icon,
+    has_picture,
+    load_icon,
+    load_picture,
+)
 from xknxeditor.prod.baggage import Baggages
 from xknxeditor.prod.errors import ArchiveError
 
@@ -192,6 +199,7 @@ class ProjectPlugin:
             ),
             get_help=self._help_text,
             get_icon=self._icon,
+            get_picture=self._picture,
         )
         self._dali_panel = DaliCommissioningPanel(self._run_dali)
 
@@ -1087,6 +1095,12 @@ class ProjectPlugin:
         key = f"{device.app.id}|{name}"
         baggages = self._device_baggages(device) if not has_icon(key) else None
         return load_icon(key, baggages.icon(icon_file, name) if baggages else None)
+
+    def _picture(self, device: "Device", ref_id: str) -> Picture | None:
+        """A TypePicture image from the baggages of the device's source .knxprod."""
+        key = f"{device.app.id}|{ref_id}"
+        baggages = self._device_baggages(device) if not has_picture(key) else None
+        return load_picture(key, baggages.file(ref_id) if baggages else None)
 
     def _device_baggages(self, device: "Device") -> Baggages | None:
         info = self._api.project.get_device_info(device.node_id)

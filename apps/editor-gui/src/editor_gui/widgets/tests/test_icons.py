@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 import zlib
 
-from editor_gui.widgets.icons import white_png
+from editor_gui.widgets.icons import dark_png, white_png
 
 
 def _png(
@@ -67,3 +67,21 @@ def test_coloured_icon_is_kept() -> None:
 
 def test_not_a_png() -> None:
     assert white_png(b"<svg/>") is None
+
+
+def test_picture_greys_are_inverted_and_colours_kept() -> None:
+    src = _png(
+        [(0, 0, 0, 255), (64, 160, 64, 255), (250, 250, 245, 128), (0, 0, 0, 0)], 2, 1
+    )
+    result = dark_png(src)
+    assert result is not None
+    assert _pixels(result) == [
+        (255, 255, 255, 255),
+        (64, 160, 64, 255),
+        (5, 5, 10, 128),
+        (255, 255, 255, 0),
+    ]
+
+
+def test_opaque_picture_is_kept() -> None:
+    assert dark_png(_png([(0, 0, 0, 255), (255, 255, 255, 255)], 2)) is None

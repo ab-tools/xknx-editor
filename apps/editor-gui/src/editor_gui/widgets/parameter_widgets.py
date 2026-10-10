@@ -11,7 +11,7 @@ from editor_gui.device import Device
 from editor_gui.regional import regional_format
 from editor_gui.widgets.dpi import px
 from editor_gui.widgets.float_format import format_float, general_float, parse_float
-from editor_gui.widgets.icons import Icon, draw_icon
+from editor_gui.widgets.icons import Icon, Picture, draw_icon
 from editor_gui.widgets.strings import S
 from editor_gui.widgets.time_format import (
     format_time,
@@ -25,6 +25,9 @@ from editor_gui.widgets.value_pickers import (
     render_date_param,
 )
 from xknxeditor.namespaces.intermediate.access_t import Access
+from xknxeditor.namespaces.intermediate.horizontal_alignment_t import (
+    HorizontalAlignment,
+)
 from xknxeditor.namespaces.intermediate.parameter_block_layout_t import (
     ParameterBlockLayout,
 )
@@ -153,7 +156,42 @@ def _value_display(param: UiParameter, value: str) -> str:
 
 def _shows_as_text(param: UiParameter) -> bool:
     """A read-only parameter is shown as its value; a checkbox keeps its (disabled) box."""
-    return param.access == Access.READ and not isinstance(param.widget, CheckBoxWidget)
+    return param.access == Access.READ and not isinstance(
+        param.widget, CheckBoxWidget | PictureWidget
+    )
+
+
+# Loads the picture of a TypePicture baggage while a parameter tree is drawn.
+_get_picture: Callable[[str], Picture | None] | None = None
+
+
+def _render_picture(widget: PictureWidget, width: float) -> None:
+    """The picture at its own size, placed in ``width`` by its alignment and clipped to it."""
+    picture = _get_picture(widget.ref_id) if _get_picture is not None else None
+    if picture is None:
+        imgui.text_disabled(S.NODE_IMAGE_PLACEHOLDER)
+        return
+    w, h = px(picture.width), px(picture.height)
+    alignment = widget.horizontal_alignment
+    if alignment == HorizontalAlignment.STRETCH:
+        w, h = width, h * width / w
+    start = imgui.get_cursor_screen_pos()
+    x = start.x
+    if alignment == HorizontalAlignment.RIGHT:
+        x += width - w
+    elif alignment == HorizontalAlignment.MIDDLE:
+        x += (width - w) / 2
+    draw_list = imgui.get_window_draw_list()
+    draw_list.push_clip_rect(start, imgui.ImVec2(start.x + width, start.y + h), True)
+    while True:
+        draw_list.add_image(
+            picture.texture, imgui.ImVec2(x, start.y), imgui.ImVec2(x + w, start.y + h)
+        )
+        x += w
+        if alignment != HorizontalAlignment.REPEAT or x >= start.x + width:
+            break
+    draw_list.pop_clip_rect()
+    imgui.dummy(imgui.ImVec2(width, h))
 
 
 @dataclass
@@ -255,8 +293,8 @@ def render_param_widget(
                     on_change("1" if new_checked else "0")
         case RawDataWidget():
             pass
-        case PictureWidget():
-            imgui.text_disabled(S.NODE_IMAGE_PLACEHOLDER)
+        case PictureWidget() as w:
+            _render_picture(w, imgui.get_content_region_avail().x)
         case _:
             _render_text_param(widget_id, param.value, on_change, differs)
     return None
@@ -866,10 +904,13 @@ def render_ui_tree(
     *,
     height: float = 0.0,
     get_icon: Callable[[str], Icon | None] | None = None,
+    get_picture: Callable[[str], Picture | None] | None = None,
     footer: Callable[[float], None] | None = None,
     footer_height: float = 0.0,
 ) -> EnumPopupRequest | None:
     """The page tree beside the selected page, with filter and multi-device diff markers.
+
+    ``get_icon`` loads a page icon by name and ``get_picture`` a picture by baggage id.
 
     ``footer`` is drawn below the page, about ``footer_height`` high, and is passed the
     exact height left for it.
@@ -920,15 +961,20 @@ def render_ui_tree(
             imgui.begin_child("##page_content", imgui.ImVec2(0, page_height), 0, scroll)
             and selected is not None
         ):
-            popup_request = _render_page(
-                device,
-                selected,
-                on_change,
-                deferred_enum,
-                needle,
-                differing_refs,
-                buttons,
-            )
+            global _get_picture
+            _get_picture = get_picture
+            try:
+                popup_request = _render_page(
+                    device,
+                    selected,
+                    on_change,
+                    deferred_enum,
+                    needle,
+                    differing_refs,
+                    buttons,
+                )
+            finally:
+                _get_picture = None
         imgui.end_child()
         if footer is not None:
             footer(bottom - imgui.get_cursor_screen_pos().y)
@@ -1054,7 +1100,13 @@ def _render_children(
         pending_params.clear()
 
     for node in children:
-        if isinstance(node, UiParameter):
+        if isinstance(node, UiParameter) and isinstance(node.widget, PictureWidget):
+            if needle:
+                continue
+            flush()
+            width = min(imgui.get_content_region_avail().x, px(_GRID_REFERENCE_WIDTH))
+            _render_picture(node.widget, width)
+        elif isinstance(node, UiParameter):
             if not needle or needle in node.label.lower():
                 pending_params.append(node)
         elif isinstance(node, UiParameterBlock):
