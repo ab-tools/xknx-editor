@@ -86,6 +86,10 @@ class ChooseWhenNode(DynamicNode):
             and any(ctx.is_discovered_active(sib) for sib in self._union_sibling_refs)
         ):
             return []
+        # A Choose on a parameter that is neither shown nor assigned selects no branch at all,
+        # not even its default.
+        if not ctx.is_gate_active(self._param_ref_id):
+            return []
         value = ctx.get(self._param_ref_id) or ""
         result: list[UiNode] = []
         matched = False
