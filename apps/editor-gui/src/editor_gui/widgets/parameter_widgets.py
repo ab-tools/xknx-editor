@@ -866,12 +866,13 @@ def render_ui_tree(
     *,
     height: float = 0.0,
     get_icon: Callable[[str], Icon | None] | None = None,
-    footer: Callable[[], None] | None = None,
+    footer: Callable[[float], None] | None = None,
     footer_height: float = 0.0,
 ) -> EnumPopupRequest | None:
     """The page tree beside the selected page, with filter and multi-device diff markers.
 
-    ``footer`` is drawn below the page, ``footer_height`` high, next to the tree.
+    ``footer`` is drawn below the page, about ``footer_height`` high, and is passed the
+    exact height left for it.
     """
     if not nodes:
         return None
@@ -911,7 +912,10 @@ def render_ui_tree(
                 _selected_pages[device.node_id] = clicked
         imgui.end_child()
         imgui.table_next_column()
-        page_height = height - footer_height if footer is not None else height
+        bottom = imgui.get_cursor_screen_pos().y + height
+        page_height = height
+        if footer is not None:
+            page_height = max(height - footer_height, imgui.get_frame_height() * 3)
         if (
             imgui.begin_child("##page_content", imgui.ImVec2(0, page_height), 0, scroll)
             and selected is not None
@@ -927,7 +931,7 @@ def render_ui_tree(
             )
         imgui.end_child()
         if footer is not None:
-            footer()
+            footer(bottom - imgui.get_cursor_screen_pos().y)
         imgui.end_table()
     return popup_request
 

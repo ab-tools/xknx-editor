@@ -37,8 +37,6 @@ from editor_gui.widgets.module_table import build_module_tables, render_module_t
 
 _log = structlog.get_logger("configure")
 
-_SPLITTER_HEIGHT = 6.0
-
 
 def _same_line_if_fits(label: str) -> None:
     """Put the next button beside the previous item if it fits, else below it."""
@@ -413,7 +411,7 @@ class ConfigurePanel:
                         differing_refs=differing,
                         buttons=self._button_actions(multi=len(joint) > 1),
                         get_icon=self._icon_getter(device),
-                        footer=(lambda: self._render_help(help_text))
+                        footer=(lambda h: self._render_help(help_text, h))
                         if help_text
                         else None,
                         footer_height=self._help_height() if help_text else 0.0,
@@ -780,24 +778,21 @@ class ConfigurePanel:
         return self._get_help(device, context) or None
 
     def _help_height(self) -> float:
-        """Height of the splitter, heading and pane of the help below the parameters."""
-        return (
-            px(_SPLITTER_HEIGHT)
-            + imgui.get_style().item_spacing.y
-            + imgui.get_frame_height_with_spacing()
-            + self._help_pane_height()
-        )
+        """Height of the heading and pane of the help below the parameters."""
+        return imgui.get_frame_height_with_spacing() + self._help_pane_height()
 
     def _help_pane_height(self) -> float:
         if self._help_pane_h <= 0:
             self._help_pane_h = imgui.get_text_line_height_with_spacing() * 5
         return self._help_pane_h
 
-    def _render_help_splitter(self) -> None:
-        """A bar above the help that resizes it when dragged."""
-        imgui.invisible_button(
-            "##help_splitter", imgui.ImVec2(-1, px(_SPLITTER_HEIGHT))
-        )
+    def _render_help_heading(self) -> None:
+        """The help heading, which resizes the help when dragged."""
+        imgui.separator_text(S.CONFIGURE_HELP)
+        top_left = imgui.get_item_rect_min()
+        size = imgui.get_item_rect_size()
+        imgui.set_cursor_screen_pos(top_left)
+        imgui.invisible_button("##help_splitter", size)
         if imgui.is_item_hovered() or imgui.is_item_active():
             imgui.set_mouse_cursor(imgui.MouseCursor_.resize_ns)
         if imgui.is_item_active():
@@ -805,12 +800,11 @@ class ConfigurePanel:
             height = self._help_pane_height() - imgui.get_io().mouse_delta.y
             self._help_pane_h = min(max(height, line * 2), line * 40)
 
-    def _render_help(self, text: str) -> None:
-        self._render_help_splitter()
-        imgui.separator_text(S.CONFIGURE_HELP)
-        if imgui.begin_child(
-            "##param_help", imgui.ImVec2(0, self._help_pane_height()), True
-        ):
+    def _render_help(self, text: str, height: float) -> None:
+        top = imgui.get_cursor_screen_pos().y
+        self._render_help_heading()
+        pane = height - (imgui.get_cursor_screen_pos().y - top)
+        if imgui.begin_child("##param_help", imgui.ImVec2(0, max(pane, 1.0)), True):
             render_markdown(text)
         imgui.end_child()
 
